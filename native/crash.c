@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <stdio.h>
 
+#include "iat.h"
 #include "log.h"
 
 static void describe(void *addr, char *buf, size_t len)
@@ -106,44 +107,13 @@ static void hook__exit(int code)
 	real__exit(code);
 }
 
-/* Replace one named import of `mod` (case-insensitive DLL match). */
-static void hook_import(HMODULE mod, const char *dll, const char *func, void *hook, void **real)
-{
-	BYTE *base = (BYTE *)mod;
-	IMAGE_NT_HEADERS *nt;
-	IMAGE_IMPORT_DESCRIPTOR *imp;
-
-	if (!mod)
-		return;
-	nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
-	imp = (IMAGE_IMPORT_DESCRIPTOR *)(base + nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-	for (; imp->Name; imp++) {
-		IMAGE_THUNK_DATA *names, *iat;
-		if (_stricmp((const char *)(base + imp->Name), dll) || !imp->OriginalFirstThunk)
-			continue;
-		names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
-		iat = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
-		for (; names->u1.AddressOfData; names++, iat++) {
-			DWORD old;
-			if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal) ||
-			    strcmp((const char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name, func))
-				continue;
-			if (!*real)
-				*real = (void *)iat->u1.Function;
-			VirtualProtect(&iat->u1.Function, sizeof(iat->u1.Function), PAGE_READWRITE, &old);
-			iat->u1.Function = (ULONG_PTR)hook;
-			VirtualProtect(&iat->u1.Function, sizeof(iat->u1.Function), old, &old);
-		}
-	}
-}
-
 /* Log who ends the process: exe, game DLL and Steam API. */
 void crash_hook_exits(HMODULE mod)
 {
-	hook_import(mod, "KERNEL32.dll", "ExitProcess", (void *)hook_ExitProcess, (void **)&real_ExitProcess);
-	hook_import(mod, "KERNEL32.dll", "TerminateProcess", (void *)hook_TerminateProcess, (void **)&real_TerminateProcess);
-	hook_import(mod, "api-ms-win-crt-runtime-l1-1-0.dll", "exit", (void *)hook_exit, (void **)&real_exit);
-	hook_import(mod, "api-ms-win-crt-runtime-l1-1-0.dll", "_exit", (void *)hook__exit, (void **)&real__exit);
+	iat_hook(mod, "KERNEL32.dll", "ExitProcess", (void *)hook_ExitProcess, (void **)&real_ExitProcess);
+	iat_hook(mod, "KERNEL32.dll", "TerminateProcess", (void *)hook_TerminateProcess, (void **)&real_TerminateProcess);
+	iat_hook(mod, "api-ms-win-crt-runtime-l1-1-0.dll", "exit", (void *)hook_exit, (void **)&real_exit);
+	iat_hook(mod, "api-ms-win-crt-runtime-l1-1-0.dll", "_exit", (void *)hook__exit, (void **)&real__exit);
 }
 
 void crash_install(void)

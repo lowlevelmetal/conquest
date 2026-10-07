@@ -15,8 +15,9 @@ echo "$1" > "$game/conquest/autotest.host.txt"
 echo "$2" > "$game/conquest/autotest.client.txt"
 rm -f "$game/conquest.host.log" "$game/conquest.client.log"
 
-"$here/tools/run_instance.sh" host &
+# side by side, windowed, so both stay visible (tools/shoot.sh)
+CONQUEST_WINDOW=0,0,1280,720 "$here/tools/run_instance.sh" host &
 for _ in $(seq 1 90); do grep -q "net: listening" "$game/conquest.host.log" 2>/dev/null && break; sleep 1; done
-"$here/tools/run_instance.sh" client &
+CONQUEST_WINDOW=1280,0,1280,720 "$here/tools/run_instance.sh" client &
 echo "started host and client"
 wait

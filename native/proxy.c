@@ -16,6 +16,8 @@
 void crash_install(void);
 void crash_hook_exits(HMODULE mod);
 void crash_process_exit(void);
+void testwin_install_exe(HMODULE exe);
+void testwin_install_game(HMODULE game);
 
 typedef HMODULE (WINAPI *LoadLibraryA_t)(LPCSTR);
 typedef FARPROC (WINAPI *GetProcAddress_t)(HMODULE, LPCSTR);
@@ -69,6 +71,7 @@ static void on_loaded(HMODULE mod)
 	log_printf("proxy: Battlefront2.dll loaded at %p", (void *)mod);
 	crash_hook_exits(mod);
 	crash_hook_exits(GetModuleHandleA("steam_api64.dll"));
+	testwin_install_game(mod);
 	if (!game_patch(mod))
 		log_printf("proxy: patching failed; online conquest is disabled");
 	if (!shim_install(mod))
@@ -209,6 +212,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 		crash_hook_exits(GetModuleHandleA(NULL));
 		avoid_proton_present_timing_crash();
 		hook_imports(GetModuleHandleA(NULL));
+		testwin_install_exe(GetModuleHandleA(NULL));
 		on_loaded(GetModuleHandleA("Battlefront2.dll"));
 	} else if (reason == DLL_PROCESS_DETACH) {
 		crash_process_exit();

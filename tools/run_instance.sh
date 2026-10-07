@@ -5,7 +5,14 @@
 set -u
 game=/mnt/games1/SteamLibrary/steamapps/common/Battle
 proton="/mnt/games1/SteamLibrary/steamapps/common/Proton - Experimental/proton"
-export STEAM_COMPAT_DATA_PATH=/mnt/games1/SteamLibrary/steamapps/compatdata/2446550
+# Each copy gets its own Wine prefix (and so its own wineserver): two copies
+# sharing a prefix, or a copy next to a Steam-launched game, take each other
+# down when one of them exits.
+compat=/mnt/games1/SteamLibrary/steamapps/compatdata
+export STEAM_COMPAT_DATA_PATH="$compat/2446550-$1"
+if [ ! -d "$STEAM_COMPAT_DATA_PATH/pfx" ]; then
+	cp -a "$compat/2446550" "$STEAM_COMPAT_DATA_PATH"
+fi
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.local/share/Steam"
 export SteamAppId=2446550 SteamGameId=2446550 CONQUEST_INSTANCE="$1"
 cd "$game"
