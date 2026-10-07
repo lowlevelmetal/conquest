@@ -453,6 +453,19 @@ card.Next = function(this)
 	CGC.LaunchBattle()
 end
 
+-- Bonus cards take effect in the battle simulation, which only the host runs.
+-- The client keeps the card bookkeeping (activeBonus, spent cards) in sync but
+-- must not arm engine bonuses: they are never consumed by its battle, and the
+-- leftover engine state crashed the client's renderer after the battle.
+local activateBonus = ActivateBonus
+ActivateBonus = function(team, bonus)
+	if CGC.Active() and CGC.session.role == "client" then
+		CGC.Log("bonus " .. tostring(bonus) .. " for team " .. tostring(team) .. " applies on the host")
+		return
+	end
+	return activateBonus(team, bonus)
+end
+
 -- results ---------------------------------------------------------------------------------
 
 local resultAccept = ifs_freeform_result.Input_Accept

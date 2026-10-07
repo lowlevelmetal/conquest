@@ -10,6 +10,9 @@ local function load(file)
 	return ok
 end
 
+-- the per-frame tick is only for battles
+ConquestNet_EnableTick(0)
+
 load("lua/cgc/serialize.lua")
 load("lua/cgc/link.lua")
 load("lua/cgc/menu.lua")
@@ -67,6 +70,24 @@ if ConquestNet_ReadFile(instance ~= "" and ("autotest." .. instance .. ".txt") o
 	ScriptCB_PushScreen = function(s) log("screen: push " .. screenName(s)) return push(s) end
 	ScriptCB_SetIFScreen = function(s) log("screen: set " .. screenName(s)) return setScreen(s) end
 	ifs_movietrans_PushScreen = function(s) log("screen: movietrans " .. screenName(s)) return movietrans(s) end
+	-- and anything that leaves the shell
+	local function trace(name)
+		local fn = _G[name]
+		if fn then
+			_G[name] = function(a, b, c)
+				log("exit-trace: " .. name .. "(" .. tostring(a) .. ") " .. debug.traceback())
+				return fn(a, b, c)
+			end
+		end
+	end
+	trace("ScriptCB_QuitToWindows")
+	trace("ScriptCB_QuitToLauncher")
+	trace("ScriptCB_QuitToShell")
+	trace("SetState")
+	trace("ScriptCB_PopScreen")
 end
 
-ConquestNet_RunFile("lua/autotest.lua")
+-- development autotests (not shipped in the player package)
+if ConquestNet_ReadFile("lua/autotest.lua") then
+	ConquestNet_RunFile("lua/autotest.lua")
+end

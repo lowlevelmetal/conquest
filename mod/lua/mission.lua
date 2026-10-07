@@ -27,4 +27,7 @@ if not ok then
 	ConquestNet_Log("mission: cgc/battle.lua failed: " .. tostring(err))
 end
 
-ConquestNet_RunFile("lua/autotest.lua")
+-- development autotests (not shipped in the player package)
+if ConquestNet_ReadFile("lua/autotest.lua") then
+	ConquestNet_RunFile("lua/autotest.lua")
+end

@@ -120,6 +120,27 @@ static int WSAAPI hook_closesocket(SOCKET s)
 	return real_closesocket(s);
 }
 
+/* Diagnostics: log the launcher's platform events (SDL user events). Codes 3
+ * and 5 make the game quit to the launcher. */
+typedef int (*SDL_PollEvent_fn)(void *event);
+static SDL_PollEvent_fn real_SDL_PollEvent;
+static const unsigned *g_platform_event_type;
+
+static int hook_SDL_PollEvent(void *event)
+{
+	int r = real_SDL_PollEvent(event);
+	if (r && event) {
+		unsigned type = ((unsigned *)event)[0];
+		if (g_platform_event_type && *g_platform_event_type != 0xFFFFFFFFu && type == *g_platform_event_type)
+			log_printf("shim: platform event code %d", ((int *)event)[3]);
+		else if (type == 0x100)
+			log_printf("shim: SDL_QUIT event");
+		else if (type == 0x200 && ((unsigned char *)event)[12] == 14)
+			log_printf("shim: window close event");
+	}
+	return r;
+}
+
 void shim_set_tunnel(int on)
 {
 	InterlockedExchange(&g_tunnel, on ? 1 : 0);
@@ -168,5 +189,29 @@ int shim_install(HMODULE mod)
 		}
 	}
 	log_printf("shim: hooked %d Winsock imports", count);
+
+	/* SDL_PollEvent by name, for the platform event log */
+	g_platform_event_type = (const unsigned *)(base + 0x64b148);
+	imp = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress);
+	for (; imp->Name; imp++) {
+		IMAGE_THUNK_DATA *names, *iat;
+		if (_stricmp((const char *)(base + imp->Name), "SDL.dll") || !imp->OriginalFirstThunk)
+			continue;
+		names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+		iat = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+		for (; names->u1.AddressOfData; names++, iat++) {
+			IMAGE_IMPORT_BY_NAME *ibn;
+			DWORD old;
+			if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+				continue;
+			ibn = (IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData);
+			if (strcmp((const char *)ibn->Name, "SDL_PollEvent"))
+				continue;
+			real_SDL_PollEvent = (SDL_PollEvent_fn)(void *)iat->u1.Function;
+			VirtualProtect(&iat->u1.Function, sizeof(iat->u1.Function), PAGE_READWRITE, &old);
+			iat->u1.Function = (ULONG_PTR)hook_SDL_PollEvent;
+			VirtualProtect(&iat->u1.Function, sizeof(iat->u1.Function), old, &old);
+		}
+	}
 	return count == (int)(sizeof(hooks) / sizeof(hooks[0]));
 }

@@ -13,6 +13,10 @@ for word in string.gfind(ConquestNet_AutotestArgs or "", "%S+") do
 end
 
 local role = args[1]
+local flags = {}
+for _, a in ipairs(args) do
+	flags[a] = true
+end
 
 if ConquestNet_Context == "mission" then
 	-- the host ends each battle quickly so the campaign can continue; the
@@ -33,7 +37,7 @@ if ConquestNet_Context == "mission" then
 	end
 	return
 end
-local wantBattle = args[table.getn(args)] == "battle"
+local wantBattle = flags.battle
 local turnsWanted = tonumber(role == "host" and args[4] or args[3]) or 2
 local main = ifs_freeform_main
 
@@ -59,7 +63,8 @@ local function watch(screen, name)
 	screen.Enter = function(this, bFwd)
 		current, since = name, 0
 		log("autotest: screen " .. name .. (bFwd and "" or " (back)"))
-		return enter(this, bFwd)
+		enter(this, bFwd)
+		log("autotest: screen " .. name .. " entered")
 	end
 end
 watch(ifs_freeform_fleet, "fleet")
@@ -75,14 +80,46 @@ watch(ifs_cgc_launch, "launch")
 local turnsDone = tonumber(ConquestNet_GetValue("autotest_turns")) or 0
 local acted = {}
 
+local function isFight(team, planet)
+	return main.planetTeam[planet] == 3 - team or main.planetFleet[planet] == 3 - team or main.planetFleet[planet] == 0
+end
+
+-- first step on the shortest lane path from start to the nearest enemy
+local function stepTowardEnemy(team, start)
+	local cameFrom = { [start] = start }
+	local queue = { start }
+	local head = 1
+	while queue[head] do
+		local planet = queue[head]
+		head = head + 1
+		for _, dest in ipairs(main.planetDestination[planet]) do
+			if not cameFrom[dest] and main.planetFleet[dest] ~= team then
+				cameFrom[dest] = planet
+				if isFight(team, dest) then
+					while cameFrom[dest] ~= start do
+						dest = cameFrom[dest]
+					end
+					return dest
+				end
+				table.insert(queue, dest)
+			end
+		end
+	end
+end
+
 local function chooseMove(team)
 	local fallback
 	for start, owner in pairs(main.planetFleet) do
 		if owner == team then
+			if wantBattle then
+				local step = stepTowardEnemy(team, start)
+				if step and ifs_freeform_fleet:IsValidMove(team, start, step) then
+					return start, step
+				end
+			end
 			for _, dest in ipairs(main.planetDestination[start]) do
 				if ifs_freeform_fleet:IsValidMove(team, start, dest) then
-					local fight = main.planetTeam[dest] == 3 - team or main.planetFleet[dest] == 3 - team
-					if fight == wantBattle then
+					if not wantBattle and not isFight(team, dest) then
 						return start, dest
 					end
 					fallback = fallback or { start, dest }
@@ -130,6 +167,16 @@ ConquestNet_AutotestTick = function()
 			log("autotest: done after " .. turnsDone .. " turns: " .. digest())
 			return
 		end
+		-- buy and equip a bonus card when affordable (stock AI purchase code)
+		local team = main.playerTeam
+		local using = ifs_purchase_tech_using[team]
+		if not flags.nocards and not ConquestNet_GetValue("autotest_card" .. team) and main.teamResources[team] >= 40 then
+			ConquestNet_SetValue("autotest_card" .. team, "1")
+			ifs_freeform_ai:PurchaseTech(team, 1)
+			ifs_freeform_ai:PurchaseTech(team, 1)
+			log("autotest: bought and equipped " .. tostring(ifs_purchase_tech_table[1].name) ..
+				" slots " .. table.concat(using, ","))
+		end
 		local start, dest = chooseMove(main.playerTeam)
 		log("autotest: move " .. tostring(start) .. " -> " .. tostring(dest) .. " | " .. digest())
 		if start then
@@ -156,9 +203,19 @@ ConquestNet_AutotestTick = function()
 	elseif current == "card" and not ifs_freeform_battle_card.cgcRemoteTeam and not ifs_freeform_battle_card.displayTimer
 		and not acted[key .. tostring(main.playerTeam)] then
 		acted[key .. tostring(main.playerTeam)] = true
-		log("autotest: skipping bonus card for team " .. tostring(main.playerTeam))
-		ifs_freeform_battle_card:SetSelected(nil)
-		ifs_freeform_battle_card:AcceptBonus()
+		local card = ifs_freeform_battle_card
+		local pick = nil
+		for i, item in ipairs(card.useActive) do
+			if not pick and item.weight > 0 then
+				pick = i
+			end
+		end
+		log("autotest: team " .. tostring(main.playerTeam) .. " plays card " .. tostring(pick and card.useActive[pick].name))
+		card.selected = nil
+		if pick then
+			card:SetSelected(pick)
+		end
+		card:AcceptBonus()
 	elseif current == "result" and since > 4 and not acted[key] then
 		acted[key] = true
 		log("autotest: accepting result | " .. digest())

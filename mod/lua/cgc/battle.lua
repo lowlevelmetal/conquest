@@ -23,6 +23,12 @@ local function send(msg)
 	ConquestNet_Send(CGC.Serialize(msg))
 end
 
+-- the native tick must stop before this Lua state is torn down
+local function leaveBattle()
+	ConquestNet_EnableTick(0)
+	ScriptCB_QuitToShell()
+end
+
 -- next message of a kind from the other player (others are dropped)
 local function receive(kind)
 	while true do
@@ -68,6 +74,8 @@ ConquestNet_AfterDoFile = function(name)
 	end
 end
 
+ConquestNet_EnableTick(1)
+
 if session.role ~= "host" then
 	local leaving = false
 	ConquestNet_Tick = function()
@@ -80,7 +88,7 @@ if session.role ~= "host" then
 			log("host reports winner " .. tostring(msg.winner) .. "; leaving")
 			ConquestNet_SetValue("cgc_winner", tostring(msg.winner))
 			send({ kind = "left" })
-			ScriptCB_QuitToShell()
+			leaveBattle()
 		end
 	end
 	return
@@ -91,7 +99,7 @@ ConquestNet_Tick = function()
 	if quitAt and (receive("left") or ConquestNet_Time() >= quitAt) then
 		quitAt = nil
 		log("returning to the galaxy")
-		ScriptCB_QuitToShell()
+		leaveBattle()
 	end
 end
 

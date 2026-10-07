@@ -36,6 +36,8 @@ static BOOL CALLBACK init_values(PINIT_ONCE once, PVOID param, PVOID *ctx)
 	return TRUE;
 }
 
+static void get_global(lua_State *L, const char *name);
+
 static const char *arg_string(lua_State *L, int idx, size_t *len)
 {
 	const char *s;
@@ -348,6 +350,39 @@ static int l_getvalue(lua_State *L)
 	return 1;
 }
 
+/* Lua opts in with ConquestNet_EnableTick(1) and turns it off before leaving a
+ * battle, so the tick never runs while the engine is tearing a state down. */
+static volatile LONG g_tick_enabled;
+
+static int l_enabletick(lua_State *L)
+{
+	int on = lua.gettop(L) >= 1 && lua.tonumber(L, 1) != 0.0f;
+	InterlockedExchange(&g_tick_enabled, on);
+	log_printf("bridge: per-frame tick %s", on ? "on" : "off");
+	return 0;
+}
+
+void bridge_tick(void)
+{
+	static int busy;
+	static int errors;
+	lua_State *L = g_tick_enabled ? game_current_state() : NULL;
+	int top;
+
+	if (busy || !L)
+		return;
+	busy = 1;
+	top = lua.gettop(L);
+	get_global(L, "ConquestNet_Tick");
+	if (lua.type(L, -1) != LUA_TNIL && lua.pcall(L, 0, 0, 0)) {
+		const char *err = lua.tostring(L, -1);
+		if (errors++ < 10)
+			log_printf("bridge: ConquestNet_Tick failed: %s", err ? err : "(no message)");
+	}
+	lua.settop(L, top);
+	busy = 0;
+}
+
 static const struct {
 	const char *name;
 	lua_CFunction fn;
@@ -366,6 +401,7 @@ static const struct {
 	{ "ConquestNet_Recv",           l_recv },
 	{ "ConquestNet_LocalAddresses", l_localaddresses },
 	{ "ConquestNet_SetTunnel",      l_settunnel },
+	{ "ConquestNet_EnableTick",     l_enabletick },
 	{ "ConquestNet_Time",           l_time },
 	{ "ConquestNet_SetValue",       l_setvalue },
 	{ "ConquestNet_GetValue",       l_getvalue },
@@ -394,27 +430,6 @@ void bridge_register(lua_State *L)
 	}
 	log_printf("bridge: registered API in lua_State %p", (void *)L);
 	run_file(L, BOOT_SCRIPT, 0);
-}
-
-void bridge_tick(void)
-{
-	static int busy;
-	static int errors;
-	lua_State *L = game_current_state();
-	int top;
-
-	if (busy || !L)
-		return;
-	busy = 1;
-	top = lua.gettop(L);
-	get_global(L, "ConquestNet_Tick");
-	if (lua.type(L, -1) != LUA_TNIL && lua.pcall(L, 0, 0, 0)) {
-		const char *err = lua.tostring(L, -1);
-		if (errors++ < 10)
-			log_printf("bridge: ConquestNet_Tick failed: %s", err ? err : "(no message)");
-	}
-	lua.settop(L, top);
-	busy = 0;
 }
 
 void bridge_after_dofile(lua_State *L, const char *name)
