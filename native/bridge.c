@@ -129,6 +129,12 @@ static int l_version(lua_State *L)
 	return 1;
 }
 
+static int l_instance(lua_State *L)
+{
+	lua.pushstring(L, instance_name());
+	return 1;
+}
+
 static int l_log(lua_State *L)
 {
 	const char *s = arg_string(L, 1, NULL);
@@ -340,6 +346,7 @@ static const struct {
 } g_functions[] = {
 	{ "ConquestNet_Version",        l_version },
 	{ "ConquestNet_Log",            l_log },
+	{ "ConquestNet_Instance",       l_instance },
 	{ "ConquestNet_ReadFile",       l_readfile },
 	{ "ConquestNet_WriteFile",      l_writefile },
 	{ "ConquestNet_RunFile",        l_runfile },

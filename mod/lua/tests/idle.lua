@@ -1,0 +1,2 @@
+-- Autotest that does nothing: the harness still presses through the title
+-- and profile screens, leaving the game at the main menu for manual testing.

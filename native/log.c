@@ -9,6 +9,12 @@
 static CRITICAL_SECTION g_log_lock;
 static char g_dir[MAX_PATH];
 static char g_path[MAX_PATH];
+static char g_instance[32];
+
+const char *instance_name(void)
+{
+	return g_instance;
+}
 
 const char *game_dir(void)
 {
@@ -25,7 +31,13 @@ void log_init(void)
 	slash = strrchr(g_dir, '\\');
 	if (slash)
 		slash[1] = '\0';
-	snprintf(g_path, sizeof(g_path), "%sconquest.log", g_dir);
+	/* CONQUEST_INSTANCE separates logs when two copies run side by side (testing) */
+	if (!GetEnvironmentVariableA("CONQUEST_INSTANCE", g_instance, sizeof(g_instance)))
+		g_instance[0] = '\0';
+	if (g_instance[0])
+		snprintf(g_path, sizeof(g_path), "%sconquest.%s.log", g_dir, g_instance);
+	else
+		snprintf(g_path, sizeof(g_path), "%sconquest.log", g_dir);
 
 	/* start each session with a fresh log */
 	f = fopen(g_path, "w");
