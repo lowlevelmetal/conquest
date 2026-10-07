@@ -15,15 +15,19 @@ end
 local role = args[1]
 
 if ConquestNet_Context == "mission" then
-	-- the host ends each battle quickly so the campaign can continue
+	-- the host ends each battle quickly so the campaign can continue; the
+	-- attacker wins, so captured planets show the team numbering is right
 	if role == "host" then
+		local raw = ConquestNet_GetValue("cgc_session")
+		local session = raw and CGC.Deserialize(raw)
+		local winner = session and session.battle and session.battle.attacker or 1
 		table.insert(ConquestNet_PostLoad, function()
-			log("autotest: forcing victory for team 1 in 30s")
+			log("autotest: forcing victory for attacker team " .. winner .. " in 30s")
 			local timer = CreateTimer("autotest_victory")
 			SetTimerValue(timer, 30)
 			StartTimer(timer)
 			OnTimerElapse(function()
-				MissionVictory(1)
+				MissionVictory(winner)
 			end, timer)
 		end)
 	end
@@ -130,6 +134,9 @@ ConquestNet_AutotestTick = function()
 		log("autotest: move " .. tostring(start) .. " -> " .. tostring(dest) .. " | " .. digest())
 		if start then
 			ifs_freeform_fleet:AttemptMove(main.playerTeam, start, dest)
+		else
+			-- no fleet to move: end the turn, as the player would from the summary
+			ScriptCB_PushScreen("ifs_freeform_summary")
 		end
 	elseif current == "summary" and mine and not acted[key] then
 		acted[key] = true

@@ -62,7 +62,7 @@ local function hostSteps(this)
 			local p = ScriptCB_GetNetGameDefaults()
 			p.PasswordStr = s.password
 			p.bAutoAssignTeams = false
-			p.iWarmUp = 60
+			p.iWarmUp = 20
 			ScriptCB_SetNetGameDefaults(p)
 			ScriptCB_SetDedicated(nil)
 			ScriptCB_SetCanSwitchSides(1)

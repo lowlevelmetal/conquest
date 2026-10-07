@@ -40,6 +40,34 @@ end
 
 log("battle " .. tostring(session.battle.mission) .. " as " .. tostring(session.role))
 
+-- Put each player on their own faction: the engine joins the team named by
+-- ifs_sideselect<N>.CurButton when the player confirms (or by itself once the
+-- side-select timer allows), so preselect it when the screen appears. The
+-- in-game screens load after setup_teams, so hook their script load.
+local myTag = "team" .. tostring(session.myTeam)
+local afterDoFile = ConquestNet_AfterDoFile
+ConquestNet_AfterDoFile = function(name)
+	afterDoFile(name)
+	if name ~= "ifs_sideselect" then
+		return
+	end
+	for i = 1, 4 do
+		local screen = _G["ifs_sideselect" .. i]
+		if screen and screen.Enter then
+			local enter = screen.Enter
+			screen.Enter = function(this, bFwd)
+				enter(this, bFwd)
+				local button = this.buttons and this.buttons[myTag]
+				if button and not button.hidden then
+					this.CurButton = myTag
+					SetCurButton(myTag)
+					log("side select: preselected " .. myTag)
+				end
+			end
+		end
+	end
+end
+
 if session.role ~= "host" then
 	local leaving = false
 	ConquestNet_Tick = function()
