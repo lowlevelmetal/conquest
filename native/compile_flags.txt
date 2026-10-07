@@ -1,0 +1,5 @@
+--target=x86_64-w64-windows-gnu
+-isystem
+/usr/x86_64-w64-mingw32/include
+-D_WIN32_WINNT=0x0601
+-std=c11

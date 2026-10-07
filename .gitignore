@@ -10,3 +10,6 @@ tools/unluac.jar
 
 __pycache__/
 *.pyc
+
+# Native build output
+native/build/
