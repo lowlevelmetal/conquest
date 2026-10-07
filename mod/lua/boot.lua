@@ -9,10 +9,30 @@ local function run(file)
 	end
 end
 
+-- Add "Galactic Conquest" to the Multiplayer menu. That screen builds its
+-- buttons while its script loads, so the entry must go into the layout as the
+-- buttons are created, not afterwards.
+local menuHooked = false
+local function hookMultiplayerMenu()
+	if menuHooked or not AddVerticalButtons then
+		return
+	end
+	menuHooked = true
+	local addVerticalButtons = AddVerticalButtons
+	AddVerticalButtons = function(dest, layout)
+		if layout and layout == ifs_mp_vbutton_layout and not layout.cgcAdded then
+			layout.cgcAdded = true
+			table.insert(layout.buttonlist, { tag = "cgc", string = "ifs.sp.meta" })
+		end
+		return addVerticalButtons(dest, layout)
+	end
+end
+
 local loadOrder = {}
 
 function ConquestNet_AfterDoFile(name)
 	table.insert(loadOrder, name)
+	hookMultiplayerMenu()
 	if name == "ifs_achievements_test" then
 		-- last script loaded by shell_interface, just before it shows the first screen
 		ConquestNet_Context = "shell"

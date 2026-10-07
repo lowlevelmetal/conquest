@@ -37,33 +37,25 @@ if ConquestNet_Context == "mission" then
 		afterDoFile(name)
 	end
 
-	-- mission scripts define ScriptPostLoad after setup_teams loads; wrap it on definition
-	setmetatable(getfenv(0), { __newindex = function(t, k, v)
-		if k == "ScriptPostLoad" and type(v) == "function" then
-			local orig = v
-			v = function()
-				orig()
-				-- the engine registers MissionVictory after setup_teams, so wrap it here
-				local victory = MissionVictory
-				MissionVictory = function(team)
-					log("autotest: MissionVictory(" .. tostring(team) .. ") -> quitting to shell")
-					ConquestNet_SetValue("battle_winner", tostring(team))
-					victory(team)
-					setStage("returning")
-					ScriptCB_QuitToShell()
-				end
-				local hold = tonumber(holdArg) or 10
-				log("autotest: ScriptPostLoad ran; forcing victory in " .. hold .. "s")
-				local t1 = CreateTimer("conquest_victory")
-				SetTimerValue(t1, hold)
-				StartTimer(t1)
-				OnTimerElapse(function()
-					MissionVictory(1)
-				end, t1)
-			end
+	table.insert(ConquestNet_PostLoad, function()
+		-- the engine registers MissionVictory after setup_teams, so wrap it here
+		local victory = MissionVictory
+		MissionVictory = function(team)
+			log("autotest: MissionVictory(" .. tostring(team) .. ") -> quitting to shell")
+			ConquestNet_SetValue("battle_winner", tostring(team))
+			victory(team)
+			setStage("returning")
+			ScriptCB_QuitToShell()
 		end
-		rawset(t, k, v)
-	end })
+		local hold = tonumber(holdArg) or 10
+		log("autotest: ScriptPostLoad ran; forcing victory in " .. hold .. "s")
+		local t1 = CreateTimer("conquest_victory")
+		SetTimerValue(t1, hold)
+		StartTimer(t1)
+		OnTimerElapse(function()
+			MissionVictory(1)
+		end, t1)
+	end)
 	return
 end
 
