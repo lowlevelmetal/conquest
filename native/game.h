@@ -39,6 +39,13 @@ extern struct lua_api lua;
 /* Resolve the Lua API and install the ScriptCB_DoFile hook. Returns 0 on failure. */
 int game_patch(HMODULE bf2);
 
+/* The engine's active Lua state (shell or mission), or NULL. */
+lua_State *game_current_state(void);
+
+/* Call the Lua global ConquestNet_Tick in the active state, if defined.
+ * Safe to call from the game thread outside Lua; ignores re-entrant calls. */
+void bridge_tick(void);
+
 /* Register the ConquestNet_* functions into L and run the boot script (once per state). */
 void bridge_register(lua_State *L);
 

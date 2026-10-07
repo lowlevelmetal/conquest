@@ -15,6 +15,15 @@ local main = ifs_freeform_main
 local JOIN_RETRY = 15     -- seconds before re-sending the join query
 local JOIN_GIVE_UP = 120
 
+-- the player name shown in battle; separate local test copies need distinct names
+local function loginName()
+	local instance = ConquestNet_Instance()
+	if instance ~= "" then
+		return ScriptCB_tounicode(instance)
+	end
+	return ScriptCB_GetCurrentProfileNetName()
+end
+
 local function eraOf(mission)
 	local _, _, era = string.find(mission or "", "^%a%a%a%d(%a)")
 	return era or "c"
@@ -40,7 +49,7 @@ local function hostSteps(this)
 		function()
 			gOnlineServiceStr = "LAN"
 			ScriptCB_SetConnectType("lan")
-			ScriptCB_SetNetLoginName(ScriptCB_GetCurrentProfileNetName())
+			ScriptCB_SetNetLoginName(loginName())
 			ScriptCB_OpenNetShell(1)
 		end,
 		function()
@@ -60,7 +69,7 @@ local function hostSteps(this)
 			ScriptCB_BeginLobby()
 		end,
 		function()
-			CGC.Send("launch", { mission = s.battle.mission, password = s.password })
+			-- the battle script sends "launch" once the map has loaded (cgc/battle.lua)
 			this.launching = true
 		end,
 	}
@@ -82,7 +91,7 @@ local function clientSteps(this)
 			ScriptCB_SetGameRules("mp")
 			gOnlineServiceStr = "LAN"
 			ScriptCB_SetConnectType("lan")
-			ScriptCB_SetNetLoginName(ScriptCB_GetCurrentProfileNetName())
+			ScriptCB_SetNetLoginName(loginName())
 			ScriptCB_OpenNetShell(1)
 		end,
 		function()
@@ -142,7 +151,8 @@ ifs_cgc_launch = NewIFShellScreen {
 			if ScriptCB_IsQuickmatchDone() == 1 then
 				this.joining = nil
 				CGC.Log("found the host's battle; joining")
-				ScriptCB_LaunchQuickmatch()
+				-- LaunchQuickmatch re-stores the join password from its argument
+				ScriptCB_LaunchQuickmatch(CGC.session.password)
 				ifs_missionselect.bForMP = 1
 				ifs_movietrans_PushScreen(ifs_mp_lobby_quick)
 				return

@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <string.h>
 
+#include "game.h"
 #include "log.h"
 #include "net.h"
 #include "shim.h"
@@ -72,6 +73,15 @@ static int WSAAPI hook_send(SOCKET s, const char *buf, int len, int flags)
 
 static int WSAAPI hook_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
+	/* the engine drains its sockets every frame on the game thread: a safe
+	 * place to give mod Lua a regular tick, even inside battles */
+	static DWORD last_tick;
+	DWORD now = GetTickCount();
+	if (now - last_tick >= 50) {
+		last_tick = now;
+		bridge_tick();
+	}
+
 	if (g_tunnel && s == g_listener) {
 		char *data;
 		size_t n;

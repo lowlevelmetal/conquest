@@ -396,6 +396,27 @@ void bridge_register(lua_State *L)
 	run_file(L, BOOT_SCRIPT, 0);
 }
 
+void bridge_tick(void)
+{
+	static int busy;
+	static int errors;
+	lua_State *L = game_current_state();
+	int top;
+
+	if (busy || !L)
+		return;
+	busy = 1;
+	top = lua.gettop(L);
+	get_global(L, "ConquestNet_Tick");
+	if (lua.type(L, -1) != LUA_TNIL && lua.pcall(L, 0, 0, 0)) {
+		const char *err = lua.tostring(L, -1);
+		if (errors++ < 10)
+			log_printf("bridge: ConquestNet_Tick failed: %s", err ? err : "(no message)");
+	}
+	lua.settop(L, top);
+	busy = 0;
+}
+
 void bridge_after_dofile(lua_State *L, const char *name)
 {
 	get_global(L, "ConquestNet_AfterDoFile");

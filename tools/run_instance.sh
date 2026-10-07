@@ -13,5 +13,5 @@ if [ -n "${2:-}" ]; then
 	WINEDEBUG=+winsock "$proton" run ./Battlefront.exe -bf2 2>&1 \
 		| grep --line-buffered -i -E "bind|connect|sendto|WSASendTo|WSAConnect|listen|getsockname" > "$2"
 else
-	"$proton" run ./Battlefront.exe -bf2 >/dev/null 2>&1
+	"$proton" run ./Battlefront.exe -bf2 >"$game/conquest.$1.stderr" 2>&1
 fi

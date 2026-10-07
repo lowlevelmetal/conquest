@@ -1,6 +1,9 @@
 -- Battle-side half of online Galactic Conquest (runs in the mission's Lua state).
--- The host reports the winner to the client over the mod link, then both
--- return to the Galactic Conquest map.
+--
+-- The host tells the client when its server is ready and who won. On victory
+-- the client leaves first, then the host: a client left connected to a
+-- server that has vanished can crash. ConquestNet_Tick is called by the
+-- native layer every frame the engine services its sockets.
 
 ConquestNet_RunFile("lua/cgc/serialize.lua")
 
@@ -10,24 +13,73 @@ if not (session and session.started and session.battle) then
 	return
 end
 
+local HOST_WAIT = 8   -- seconds the host waits for the client to leave
+
 local function log(text)
 	ConquestNet_Log("cgc battle: " .. text)
 end
+
+local function send(msg)
+	ConquestNet_Send(CGC.Serialize(msg))
+end
+
+-- next message of a kind from the other player (others are dropped)
+local function receive(kind)
+	while true do
+		local s = ConquestNet_Recv()
+		if not s then
+			return nil
+		end
+		local msg = CGC.Deserialize(s)
+		if type(msg) == "table" and msg.kind == kind then
+			return msg
+		end
+		log("ignored " .. tostring(type(msg) == "table" and msg.kind))
+	end
+end
+
 log("battle " .. tostring(session.battle.mission) .. " as " .. tostring(session.role))
 
 if session.role ~= "host" then
-	-- the client leaves when the host's server ends the match
+	local leaving = false
+	ConquestNet_Tick = function()
+		if leaving then
+			return
+		end
+		local msg = receive("result")
+		if msg then
+			leaving = true
+			log("host reports winner " .. tostring(msg.winner) .. "; leaving")
+			ConquestNet_SetValue("cgc_winner", tostring(msg.winner))
+			send({ kind = "left" })
+			ScriptCB_QuitToShell()
+		end
+	end
 	return
 end
 
--- the engine registers MissionVictory late; wrap it once the mission has loaded
+local quitAt = nil
+ConquestNet_Tick = function()
+	if quitAt and (receive("left") or ConquestNet_Time() >= quitAt) then
+		quitAt = nil
+		log("returning to the galaxy")
+		ScriptCB_QuitToShell()
+	end
+end
+
 table.insert(ConquestNet_PostLoad, function()
+	-- the server is up now: tell the client to join (joining while the host is
+	-- still loading stalls the client's handshake)
+	send({ kind = "launch", mission = session.battle.mission, password = session.password })
+	log("server ready; client told to join")
+
+	-- the engine registers MissionVictory late; wrap it once the mission has loaded
 	local victory = MissionVictory
 	MissionVictory = function(team)
 		log("winner " .. tostring(team))
 		ConquestNet_SetValue("cgc_winner", tostring(team))
-		ConquestNet_Send(CGC.Serialize({ kind = "result", winner = team }))
+		send({ kind = "result", winner = team })
 		victory(team)
-		ScriptCB_QuitToShell()
+		quitAt = ConquestNet_Time() + HOST_WAIT
 	end
 end)

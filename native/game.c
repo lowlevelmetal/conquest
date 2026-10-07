@@ -53,6 +53,16 @@ static const struct signature g_sigs[] = {
 	{ "lua_pcall",        SLOT(pcall),        0x384350, "48 89 5C 24 08 57 48 83 EC 40 4C 8B 59 38 41 8B" },
 };
 
+/* Registration helper whose first RIP-relative load is the engine's current lua_State. */
+static const char *STATE_HELPER_SIG = "40 53 48 83 EC 20 48 8B D9 48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 0D";
+#define STATE_HELPER_RVA 0x249b80
+static lua_State **g_current_state;
+
+lua_State *game_current_state(void)
+{
+	return g_current_state ? *g_current_state : NULL;
+}
+
 /* Every mission and the shell load their scripts through this, in each Lua state. */
 #define HOOK_FUNCTION "ScriptCB_DoFile"
 
@@ -189,6 +199,19 @@ int game_patch(HMODULE bf2)
 		if (!*g_sigs[i].slot) {
 			log_printf("game: cannot locate %s; this game build is not supported", g_sigs[i].name);
 			return 0;
+		}
+	}
+
+	{
+		struct signature helper = { "current lua_State", NULL, STATE_HELPER_RVA, STATE_HELPER_SIG };
+		uint8_t *p = resolve(bf2, &text, &helper);
+		if (p) {
+			int32_t disp = *(int32_t *)(p + 12);
+			g_current_state = (lua_State **)(p + 16 + disp);
+			log_printf("game: current lua_State global at rva %#lx",
+			           (unsigned long)((uint8_t *)g_current_state - (uint8_t *)bf2));
+		} else {
+			log_printf("game: current lua_State global not found; per-frame tick disabled");
 		}
 	}
 

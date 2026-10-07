@@ -152,15 +152,27 @@ end
 -- the client never runs the battle's mission logic; the host tells it who won
 local lastBattleVictory = ScriptCB_GetLastBattleVictory
 ScriptCB_GetLastBattleVictory = function()
-	if CGC.Active() and CGC.session.role == "client" and CGC.session.battle then
-		local winner = tonumber(ConquestNet_GetValue("cgc_winner"))
-		if not winner then
-			local msg = CGC.Take("result")
-			winner = msg and msg.winner
+	local battleInfo = CGC.Active() and CGC.session.role == "client" and CGC.session.battle
+	if battleInfo then
+		-- the stock code asks more than once (LoadState, then Enter); keep the
+		-- answer until Enter has applied it and cleared session.battle
+		if not battleInfo.winner then
+			-- normally the battle script already received the host's result
+			battleInfo.winner = tonumber(ConquestNet_GetValue("cgc_winner"))
+			ConquestNet_SetValue("cgc_winner", nil)
 		end
-		ConquestNet_SetValue("cgc_winner", nil)
-		CGC.Log("battle winner from host: " .. tostring(winner))
-		return winner or 0
+		if not battleInfo.winner then
+			-- otherwise it is on its way: the link thread keeps receiving while we wait
+			local msg = CGC.Take("result")
+			local deadline = ConquestNet_Time() + 10
+			while not msg and not CGC.LinkLost() and ConquestNet_Time() < deadline do
+				msg = CGC.Take("result")
+			end
+			battleInfo.winner = msg and msg.winner
+			CGC.SaveSession()
+			CGC.Log("battle winner from host: " .. tostring(battleInfo.winner))
+		end
+		return battleInfo.winner or 0
 	end
 	return lastBattleVictory()
 end

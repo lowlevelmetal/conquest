@@ -39,10 +39,13 @@ gIFShellScreenTemplate_fnUpdate = function(this, fDt)
 	end
 end
 
--- the main menu is the point where automated tests may start
+-- the main menu is the point where automated tests may start; remember it
+-- across shell restarts (after a battle the shell goes straight back to GC)
+ConquestNet_MainMenuSeen = ConquestNet_GetValue("main_menu_seen") ~= nil
 local mainEnter = ifs_main.Enter
 ifs_main.Enter = function(this, bFwd)
 	ConquestNet_MainMenuSeen = true
+	ConquestNet_SetValue("main_menu_seen", "1")
 	return mainEnter(this, bFwd)
 end
 
