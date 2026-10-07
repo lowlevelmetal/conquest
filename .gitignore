@@ -1,0 +1,12 @@
+# Game data and third-party sources: never commit
+extracted/
+ref/
+
+# Lua toolchain is fetched and built by tools/build_luac.sh
+tools/lua50/
+
+# Downloaded decompiler
+tools/unluac.jar
+
+__pycache__/
+*.pyc
