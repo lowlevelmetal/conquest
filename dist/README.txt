@@ -15,16 +15,17 @@ INSTALL (both players)
 PLAY
   Start Battlefront II, then Multiplayer > Galactic Conquest.
 
-  Host: pick an era and your side ("Host Clone Wars as the Republic", ...).
-        The screen shows your local address. Give your friend your public
-        IP address (search "what is my ip").
-  Join: choose "Join a game by IP address" and type the host's IP.
+  Host Lobby: choose the scenario (Clone Wars or Galactic Civil War), then
+        your side. The lobby shows your local address at the bottom right.
+        Over the internet, give your friend your public IP address (search
+        "what is my ip"). When they appear in the lobby, choose Launch.
+  Join Lobby: type the host's IP address and press Enter or OK. You join on
+        the side the host left free.
 
   The Republic or Rebels move first. On your turn, play as usual. On the
   other player's turn you watch the galaxy until they finish. In a battle
   the defender picks the battle type, each side picks its own bonus card,
-  and then both players load into the battle together. Pick your faction
-  on the side-select screen if it is not chosen for you.
+  and then both players load into the battle together.
 
 PORTS (host only)
   The host must forward these ports on their router to their PC:

@@ -87,3 +87,47 @@ UDP 3658 and the mod's TCP port.
   `ScriptPostLoad`. `ScriptCB_QuitToShell()` right after victory returns to
   the shell without map rotation, and `ScriptCB_GetLastBattleVictory()` then
   reports the winner on the host.
+
+## Lobby protocol (mod link)
+
+The Galactic Conquest lobby runs over the mod's TCP link before any engine
+session exists. The joining player sends `hello {protocol, version, name}`;
+the host answers `setup {scenario, hostTeam, name}` or `refuse {reason}`
+(`version`), so the joiner takes the side the host left free. `ping`/`pong
+{t}` fill the lobby's Ping column, `start` launches the campaign on both
+machines and `bye` leaves the lobby. The host drops a connection that sends
+no `hello` within 10 s and listens again whenever the other player leaves.
+
+## Shell UI notes
+
+* Localized strings worth reusing (all present in the shipped localization):
+  `ifs.mplobby.host_title` "Host Lobby", `ifs.mplobby.client_title`,
+  `ifs.MPLobby.name_header` / `team_header` / `ping_header`,
+  `common.mp.joinip_prompt` "IP :", `common.mp.joining`, `common.mp.launch`,
+  `common.launching` "Prepare for Battle...", `common.waitforhost`
+  "Contacting host ...", `ifs.meta.Configs.title` "Select Scenario",
+  `ifs.freeform.picksides`, `common.sides.<rep|cis|all|imp>.name`,
+  `ifs.onlinelobby.cancelsession` / `leavesession` / `wrongver`, and the join
+  errors `ifs.mp.joinerrors.<noconnect|full|hostquit|connectlost|version>`
+  (key names found as strings in `Battlefront2.dll`).
+* The PC Join IP box is an `NewEditbox` that takes keys only while it is
+  `gCurEditbox`; the screen's `Input_KeyDown(this, key)` feeds
+  `IFEditbox_fnAddChar` (8 = backspace, 10 = Enter). Set `bKeepsFocus` so
+  mouse movement does not steal focus.
+* An `IFImage` with a `tag` is a mouse target: hovering sets `CurButton` to
+  the tag and calls the screen's `UpdateUI`. The mouse code clears
+  `CurButton` when the pointer is over nothing.
+* `Popup_Busy` polls `fnCheckDone` every frame (-1 fail, 0 busy, 1 done) and
+  calls `fnOnFail` itself after `fTimeout`; the success/fail callbacks must
+  close the popup.
+* The shell's Back button is a 150-wide `NewPCIFButton` centred 75 in from
+  the bottom-left corner. Stock right-corner buttons placed with
+  `gIFShellScreenTemplate_fnMoveClickableButton` end up partly off screen at
+  16:9.
+* The SDL event loop (`FUN_1802dda20`, rva 0x2dda20) handles window events
+  7, 11 and 13 (minimized, mouse left, focus lost) with one deactivation
+  path and 8, 9, 10 and 12 with the matching reactivation.
+* Under GNOME Wayland, asking the window manager to activate another game
+  window (`_NET_ACTIVE_WINDOW`) left that copy stalled at 0% CPU, and a
+  covered XWayland window reads back black, so local test copies run
+  windowed side by side instead (`CONQUEST_WINDOW`, `native/testwin.c`).

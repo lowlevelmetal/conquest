@@ -6,23 +6,10 @@
 -- engine finds the host at <host IP>:3658 and connects with its normal
 -- handshake. A per-session password keeps strangers on the host's LAN out.
 
-local function U(text)
-	return ScriptCB_tounicode(text)
-end
-
 local main = ifs_freeform_main
 
 local JOIN_RETRY = 15     -- seconds before re-sending the join query
 local JOIN_GIVE_UP = 120
-
--- the player name shown in battle; separate local test copies need distinct names
-local function loginName()
-	local instance = ConquestNet_Instance()
-	if instance ~= "" then
-		return ScriptCB_tounicode(instance)
-	end
-	return ScriptCB_GetCurrentProfileNetName()
-end
 
 local function eraOf(mission)
 	local _, _, era = string.find(mission or "", "^%a%a%a%d(%a)")
@@ -49,7 +36,7 @@ local function hostSteps(this)
 		function()
 			gOnlineServiceStr = "LAN"
 			ScriptCB_SetConnectType("lan")
-			ScriptCB_SetNetLoginName(loginName())
+			ScriptCB_SetNetLoginName(CGC.LoginName())
 			ScriptCB_OpenNetShell(1)
 		end,
 		function()
@@ -86,12 +73,13 @@ local function clientSteps(this)
 			end
 			s.password = msg.password
 			CGC.SaveSession()
+			IFText_fnSetString(this.info.caption, "common.mp.joining")
 		end,
 		function()
 			ScriptCB_SetGameRules("mp")
 			gOnlineServiceStr = "LAN"
 			ScriptCB_SetConnectType("lan")
-			ScriptCB_SetNetLoginName(loginName())
+			ScriptCB_SetNetLoginName(CGC.LoginName())
 			ScriptCB_OpenNetShell(1)
 		end,
 		function()
@@ -119,15 +107,17 @@ ifs_cgc_launch = NewIFShellScreen {
 		ifs_freeform_SetButtonVis(this, "back", nil)
 		ifs_freeform_SetButtonVis(this, "misc", nil)
 		ifs_freeform_SetButtonVis(this, "help", nil)
-		IFText_fnSetUString(this.title.text, U("Preparing the battle"))
-		IFObj_fnSetVis(this.info, true)
-		IFObj_fnSetVis(this.info.text, nil)
+		IFText_fnSetString(this.title.text, "common.launching")
 		local host = CGC.session.role == "host"
-		IFText_fnSetUString(this.info.caption, U(host and "Starting the battle server ..." or "Waiting for the host's battle server ..."))
+		-- the client shows the stock wording for each stage of joining a host
+		IFObj_fnSetVis(this.info, (not host) and 1 or nil)
+		IFObj_fnSetVis(this.info.text, nil)
+		IFText_fnSetString(this.info.caption, "common.waitforhost")
 		this.steps = host and hostSteps(this) or clientSteps(this)
 		this.step = 1
 		this.launching = nil
 		this.joining = nil
+		this.warned = nil
 	end,
 
 	Update = function(this, fDt)
@@ -158,11 +148,13 @@ ifs_cgc_launch = NewIFShellScreen {
 				return
 			end
 			local now = ConquestNet_Time()
-			if now - this.joinStarted > JOIN_GIVE_UP then
-				this.joining = nil
-				IFText_fnSetUString(this.info.caption, U("Could not reach the host's battle server.\nCheck that UDP 3658 is forwarded to the host."))
-				CGC.Log("join timed out")
-			elseif now - this.lastQuery > JOIN_RETRY then
+			if now - this.joinStarted > JOIN_GIVE_UP and not this.warned then
+				-- keep trying (the host may still be loading) but say what is wrong
+				this.warned = true
+				IFText_fnSetString(this.info.caption, "ifs.mp.joinerrors.noconnect")
+				CGC.Log("join is taking too long; is UDP 3658 forwarded to the host?")
+			end
+			if now - this.lastQuery > JOIN_RETRY then
 				this.lastQuery = now
 				CGC.Log("retrying join")
 				ScriptCB_BeginJoinIP(CGC.session.host, CGC.session.password)

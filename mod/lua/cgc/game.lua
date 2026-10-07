@@ -187,9 +187,36 @@ ScriptCB_PushScreen = function(name)
 	return pushScreen(name)
 end
 
-local function opponentName()
+local function opponentFaction()
 	local s = CGC.session
-	return CGC.SCENARIOS[s.scenario].teams[3 - s.myTeam]
+	return ScriptCB_ununicode(CGC.TeamName(s.scenario, 3 - s.myTeam))
+end
+
+-- the other player as shown in messages: their name, else their faction
+local function opponentName()
+	local name = CGC.session.peerName
+	if name and name ~= "" then
+		return name
+	end
+	return opponentFaction()
+end
+
+-- The galaxy's player panel shows the profile name of a locally controlled
+-- team (as in hot-seat Versus) and the faction name otherwise. Show the other
+-- player's name for their team by handing the stock code that name in place
+-- of the faction's.
+local updatePlayerText = main.UpdatePlayerText
+main.UpdatePlayerText = function(this, player)
+	if not CGC.Active() or this.joystick then
+		return updatePlayerText(this, player)
+	end
+	local teamName = this.teamName[this.playerTeam]
+	this.teamName[this.playerTeam] = opponentName()
+	local ok, err = pcall(updatePlayerText, this, player)
+	this.teamName[this.playerTeam] = teamName
+	if not ok then
+		error(err)
+	end
 end
 
 ifs_cgc_wait = NewIFShellScreen {
@@ -207,9 +234,9 @@ ifs_cgc_wait = NewIFShellScreen {
 		ifs_freeform_SetButtonVis(this, "back", nil)
 		ifs_freeform_SetButtonVis(this, "misc", nil)
 		ifs_freeform_SetButtonVis(this, "help", nil)
-		IFText_fnSetUString(this.title.text, U("Waiting for the " .. opponentName()))
+		IFText_fnSetUString(this.title.text, U("Waiting for " .. opponentName()))
 		IFObj_fnSetVis(this.info, true)
-		IFText_fnSetUString(this.info.caption, U("The " .. opponentName() .. " is taking their turn."))
+		IFText_fnSetUString(this.info.caption, U(opponentName() .. " (" .. opponentFaction() .. ") is taking their turn."))
 		IFObj_fnSetVis(this.info.text, nil)
 		main:UpdatePlayerText(this.player)
 	end,
@@ -266,7 +293,7 @@ battle.Enter = function(this, bFwd)
 	else
 		ifs_freeform_SetButtonVis(this, "accept", nil)
 		ifs_freeform_SetButtonVis(this, "back", nil)
-		IFText_fnSetUString(this.title.text, U("The " .. opponentName() .. " is attacking"))
+		IFText_fnSetUString(this.title.text, U(opponentName() .. " is attacking"))
 		IFObj_fnSetVis(this.title, 1)
 	end
 end
@@ -335,7 +362,7 @@ mode.Enter = function(this, bFwd)
 		IFObj_fnSetVis(this.buttons, nil)
 		ifs_freeform_SetButtonVis(this, "accept", nil)
 		IFObj_fnSetVis(this.title, 1)
-		IFText_fnSetUString(this.title.text, U("The " .. opponentName() .. " is choosing the battle type"))
+		IFText_fnSetUString(this.title.text, U(opponentName() .. " is choosing the battle type"))
 	end
 end
 
@@ -393,7 +420,7 @@ card.Enter = function(this, bFwd)
 	main.joystick = joystick
 	ifs_freeform_SetButtonVis(this, "accept", nil)
 	ifs_freeform_SetButtonVis(this, "misc", nil)
-	IFText_fnSetUString(this.title.text, U("The " .. opponentName() .. " is choosing a bonus"))
+	IFText_fnSetUString(this.title.text, U(opponentName() .. " is choosing a bonus"))
 end
 
 card.AcceptBonus = function(this)
@@ -518,6 +545,11 @@ function CGC.WatchLink()
 			CGC.LeaveCampaign("opponent left")
 		end
 		Popup_Ok:fnActivate(1)
-		gPopup_fnSetTitleUStr(Popup_Ok, U(quit and "The other player left the campaign." or "Lost the connection to the other player."))
+		if CGC.session.role == "client" then
+			-- the stock messages for a host that quit or dropped
+			gPopup_fnSetTitleStr(Popup_Ok, quit and "ifs.mp.joinerrors.hostquit" or "ifs.mp.joinerrors.connectlost")
+		else
+			gPopup_fnSetTitleUStr(Popup_Ok, U(opponentName() .. (quit and " left the campaign." or " lost the connection.")))
+		end
 	end
 end

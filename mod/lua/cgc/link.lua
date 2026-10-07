@@ -8,17 +8,47 @@
 CGC = CGC or {}
 
 CGC.PORT = 24600
-CGC.PROTOCOL = 1
+CGC.PROTOCOL = 2
 CGC.mailbox = CGC.mailbox or {}
+
+-- the two sides of each scenario, in team order (team 1 moves first)
+CGC.SCENARIOS = {
+	cw = { era = "common.era.cw", sides = { "rep", "cis" } },
+	gcw = { era = "common.era.gcw", sides = { "all", "imp" } },
+}
+
+-- localized faction name, e.g. "Republic"
+function CGC.TeamName(scenario, team)
+	return ScriptCB_getlocalizestr("common.sides." .. CGC.SCENARIOS[scenario].sides[team] .. ".name")
+end
+
+-- the name this player goes by online (unicode); separate local test copies
+-- share one profile, so they use their instance names
+function CGC.LoginName()
+	local instance = ConquestNet_Instance()
+	if instance ~= "" then
+		return ScriptCB_tounicode(instance)
+	end
+	return ScriptCB_GetCurrentProfileNetName()
+end
+
+function CGC.PlayerName()
+	return ScriptCB_ununicode(CGC.LoginName())
+end
 
 function CGC.Log(text)
 	ConquestNet_Log("cgc: " .. text)
 end
 
+-- frequent messages that would flood the log
+local QUIET = { ping = true, pong = true }
+
 function CGC.Send(kind, fields)
 	local msg = fields or {}
 	msg.kind = kind
-	CGC.Log("send " .. kind)
+	if not QUIET[kind] then
+		CGC.Log("send " .. kind)
+	end
 	return ConquestNet_Send(CGC.Serialize(msg))
 end
 
@@ -31,7 +61,9 @@ function CGC.Poll()
 		end
 		local msg, err = CGC.Deserialize(s)
 		if type(msg) == "table" and msg.kind then
-			CGC.Log("recv " .. msg.kind)
+			if not QUIET[msg.kind] then
+				CGC.Log("recv " .. msg.kind)
+			end
 			table.insert(CGC.mailbox, msg)
 		else
 			CGC.Log("dropped malformed message: " .. tostring(err))

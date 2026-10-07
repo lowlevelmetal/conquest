@@ -1,6 +1,8 @@
 -- Autotest: play an online Galactic Conquest campaign between two instances.
 --   cgc_play host <scenario> <team> <turns> [battle]
 --   cgc_play join <ip> <turns> [battle]
+-- Both sides start from the main menu and use the real menus and lobby.
+-- "rejoin" (join side) leaves the lobby once and joins again.
 -- On its own turns the driver moves a fleet (to a peaceful planet unless
 -- "battle" is given), skips bonus cards, picks the first battle mode and ends
 -- the turn. It logs a digest of the campaign state after each turn so both
@@ -77,6 +79,15 @@ watch(ifs_freeform_end, "end")
 watch(ifs_cgc_wait, "wait")
 watch(ifs_cgc_launch, "launch")
 
+-- ask tools/watch_shots.sh for one screenshot per label
+local function shot(label)
+	if not ConquestNet_GetValue("shot_" .. label) then
+		ConquestNet_SetValue("shot_" .. label, "1")
+		log("tour: shot " .. label)
+		return true
+	end
+end
+
 local turnsDone = tonumber(ConquestNet_GetValue("autotest_turns")) or 0
 local acted = {}
 
@@ -132,27 +143,132 @@ local function chooseMove(team)
 	end
 end
 
+-- Go through Multiplayer > Galactic Conquest like a player: one action per
+-- screen once its transition has finished (an action returning nil retries).
+local lobbyTime = 0
+local menuActions = {
+	[ifs_main] = function(this)
+		log("autotest: choosing Multiplayer")
+		this.CurButton = "mp"
+		this:Input_Accept()
+		return true
+	end,
+	[ifs_mp] = function(this)
+		log("autotest: choosing Galactic Conquest")
+		this.CurButton = "cgc"
+		this:Input_Accept()
+		return true
+	end,
+	[ifs_cgc] = function(this)
+		if role == "host" then
+			log("autotest: Host Lobby")
+			this.CurButton = "host"
+			this:Input_Accept()
+			return true
+		end
+		if not this.bJoinBoxVis then
+			log("autotest: Join Lobby")
+			this.CurButton = "join"
+			this:Input_Accept()
+			return nil
+		end
+		IFEditbox_fnSetString(this.JoinIPBox.ipedit, args[2])
+		if shot("joinbox") then
+			return nil
+		end
+		log("autotest: joining " .. args[2])
+		this.CurButton = "ok"
+		this:Input_Accept()
+		return true
+	end,
+	[ifs_cgc_scenario] = function(this)
+		log("autotest: scenario " .. args[2])
+		this.CurButton = args[2]
+		this:Input_Accept()
+		return true
+	end,
+	[ifs_cgc_sides] = function(this)
+		log("autotest: side " .. args[3])
+		this:SetSide(tonumber(args[3]))
+		this.CurButton = nil
+		this:Input_Accept()
+		return true
+	end,
+	[ifs_cgc_lobby] = function(this)
+		if role ~= "host" then
+			shot("lobby")
+			-- "rejoin": leave the lobby once, as a player changing their mind
+			if flags.rejoin and not ConquestNet_GetValue("autotest_left_lobby") then
+				ConquestNet_SetValue("autotest_left_lobby", "1")
+				log("autotest: leaving the lobby to join again")
+				this:Input_Back()
+				Popup_YesNo:fnActivate(nil)
+				Popup_YesNo.fnDone(true)
+			end
+			return true
+		end
+		-- give both lobbies a moment on screen, as a player would
+		lobbyTime = this.peer and lobbyTime + 1 or 0
+		if lobbyTime == 2 then
+			shot("lobby")
+		end
+		if lobbyTime < 5 then
+			return nil
+		end
+		log("autotest: launching with " .. tostring(this.peer.name))
+		this.CurButton = "launch"
+		this:Input_Accept()
+		return true
+	end,
+}
+
+local menuScreen, menuWait, menuDone
+local function driveMenus()
+	local screen = gCurScreenTable
+	if screen ~= menuScreen then
+		menuScreen, menuWait, menuDone = screen, 2, nil
+	end
+	if menuDone or ScriptCB_IsPopupOpen() then
+		return
+	end
+	menuWait = menuWait - 0.5
+	if menuWait > 0 then
+		return
+	end
+	menuWait = 1
+	local action = menuActions[screen]
+	if action then
+		-- a screenshot of each menu first (the lobby takes its own)
+		local name
+		for key, value in pairs({ main = ifs_main, mp = ifs_mp, cgc = ifs_cgc, scenario = ifs_cgc_scenario, sides = ifs_cgc_sides }) do
+			if value == screen then
+				name = key
+			end
+		end
+		if name and shot(role .. "_" .. name) then
+			return
+		end
+		menuDone = action(screen)
+	end
+end
+
 ConquestNet_AutotestTick = function()
 	if not ConquestNet_MainMenuSeen then
 		return
 	end
 	since = since + 0.5
 
-	if not CGC.session and not ConquestNet_GetValue("autotest_started") then
-		ConquestNet_SetValue("autotest_started", "1")
-		if role == "host" then
-			log("autotest: hosting " .. args[2] .. " as team " .. args[3])
-			ifs_movietrans_PushScreen(ifs_cgc)
-			ifs_cgc.CurButton = "host_" .. args[2] .. "_" .. args[3]
-			ifs_cgc:Input_Accept()
-		else
-			log("autotest: joining " .. args[2])
-			ifs_movietrans_PushScreen(ifs_cgc)
-			ConquestNet_JoinFor = args[2]
-			CGC.session = { role = "client", host = args[2] }
-			CGC.SaveSession()
-			ifs_movietrans_PushScreen(ifs_cgc_status)
+	if not CGC.Active() then
+		if not ConquestNet_GetValue("autotest_started") then
+			driveMenus()
 		end
+		return
+	end
+	ConquestNet_SetValue("autotest_started", "1")
+	if since >= 2.5 and current then
+		shot(current)
+	end
+	if since < 2 then
 		return
 	end
 	if not CGC.Active() or since < 2 then

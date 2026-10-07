@@ -240,7 +240,8 @@ static void run_link(struct thread_args *a, SOCKET s)
 
 	while (!stale(a->generation)) {
 		fd_set rd, wr;
-		struct timeval tv = { 0, 20 * 1000 };
+		/* short wait: messages queued by the game thread go out promptly */
+		struct timeval tv = { 0, 2 * 1000 };
 		DWORD now = GetTickCount();
 
 		if (!out) {
