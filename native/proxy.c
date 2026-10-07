@@ -11,6 +11,7 @@
 
 #include "game.h"
 #include "log.h"
+#include "shim.h"
 
 typedef HMODULE (WINAPI *LoadLibraryA_t)(LPCSTR);
 typedef HMODULE (WINAPI *LoadLibraryW_t)(LPCWSTR);
@@ -40,6 +41,8 @@ static void on_loaded(HMODULE mod)
 	log_printf("proxy: Battlefront2.dll loaded at %p", (void *)mod);
 	if (!game_patch(mod))
 		log_printf("proxy: patching failed; online conquest is disabled");
+	if (!shim_install(mod))
+		log_printf("proxy: Winsock shim incomplete; joining by IP will not work");
 }
 
 static HMODULE WINAPI hook_LoadLibraryA(LPCSTR name)

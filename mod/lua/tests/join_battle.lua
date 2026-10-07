@@ -3,10 +3,13 @@
 
 local log = ConquestNet_Log
 local stage = ConquestNet_GetValue("autotest_stage")
-local ip = ConquestNet_AutotestArgs
+-- args: "<ip> [connect type] [tunnel]"; "tunnel" discovers the host through the mod
+-- link on TCP port 24600 instead of LAN broadcast
+local _, _, ip, connectArg, tunnelArg = string.find(ConquestNet_AutotestArgs or "", "^(%S*)%s*(%S*)%s*(%S*)")
 if not ip or ip == "" then
 	ip = "127.0.0.1"
 end
+local CONNECT = (connectArg and connectArg ~= "") and connectArg or "direct"
 
 local function setStage(s)
 	ConquestNet_SetValue("autotest_stage", s)
@@ -48,9 +51,26 @@ end
 local started, deadline
 local steps = {
 	function()
+		if tunnelArg == "tunnel" then
+			log("autotest: connecting mod link " .. tostring(ConquestNet_Connect(ip, 24600)))
+		end
+	end,
+	function()
+		if tunnelArg == "tunnel" then
+			local state, detail = ConquestNet_Status()
+			log("autotest: mod link " .. state .. " (" .. detail .. ")")
+			if state ~= "connected" then
+				ConquestNet_AutotestStep = ConquestNet_AutotestStep - 1   -- retry this step
+				return
+			end
+			ConquestNet_SetTunnel(1)
+		end
+	end,
+	function()
 		ScriptCB_SetGameRules("mp")
-		gOnlineServiceStr = "Direct"
-		ScriptCB_SetConnectType("direct")
+		gOnlineServiceStr = CONNECT == "lan" and "LAN" or "Direct"
+		ScriptCB_SetConnectType(CONNECT)
+		log("autotest: connect type " .. CONNECT)
 		ScriptCB_SetNetLoginName(ScriptCB_tounicode("ConquestClient"))
 		ScriptCB_OpenNetShell(1)
 	end,
@@ -90,6 +110,5 @@ ConquestNet_AutotestTick = function()
 		ConquestNet_JoinFinished = true
 		logError("join failed")
 		setStage("done")
-		ConquestNet_AutotestQuit = 3
 	end
 end

@@ -73,3 +73,18 @@ def reg_table(img, entry_rva):
         out.append((p, name, f - img.base))
         p += 16
     return out
+
+def scriptcb(img, name):
+    """RVA of the C function registered under a ScriptCB_* name (any reg table)."""
+    needle = name.encode() + b'\0'
+    i = img.data.find(needle)
+    while i >= 0:
+        va = img.base + i
+        j = img.data.find(struct.pack('<Q', va))
+        while j >= 0:
+            fn = struct.unpack_from('<Q', img.data, j + 8)[0] - img.base
+            if img.text_rva <= fn < img.text_rva + img.text_size:
+                return fn
+            j = img.data.find(struct.pack('<Q', va), j + 1)
+        i = img.data.find(needle, i + 1)
+    return None

@@ -1,7 +1,8 @@
 """Python peer for net_test.exe: checks framing, echo, heartbeats and large frames."""
 import socket, struct, sys, time
 
-def send(s, data):
+def send(s, data, channel=0):
+    data = bytes([channel]) + data
     s.sendall(struct.pack('>I', len(data)) + data)
 
 def recv_frame(s):
@@ -21,7 +22,8 @@ def recv_payload(s, heartbeats):
     while True:
         f = recv_frame(s)
         if f:
-            return f
+            assert f[0] == 0, f[:8]   # Lua channel
+            return f[1:]
         heartbeats[0] += 1
 
 def exercise(s):
@@ -31,7 +33,7 @@ def exercise(s):
         got = recv_payload(s, hb)
         assert got == b'echo:' + msg, (got[:40], msg[:40])
     # several frames in one TCP write
-    s.sendall(b''.join(struct.pack('>I', len(m)) + m for m in [b'a', b'bb', b'ccc']))
+    s.sendall(b''.join(struct.pack('>I', len(m) + 1) + b'\0' + m for m in [b'a', b'bb', b'ccc']))
     assert [recv_payload(s, hb) for _ in range(3)] == [b'echo:a', b'echo:bb', b'echo:ccc']
     # idle long enough to see heartbeats
     s.settimeout(10)

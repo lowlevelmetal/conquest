@@ -13,3 +13,6 @@ __pycache__/
 
 # Native build output
 native/build/
+
+# Ghidra project and decompilation output (derived from game binaries)
+ref/ghidra/

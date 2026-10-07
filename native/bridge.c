@@ -12,6 +12,7 @@
 #include "game.h"
 #include "log.h"
 #include "net.h"
+#include "shim.h"
 
 #define CONQUEST_VERSION "0.1.0"
 #define BOOT_SCRIPT "lua\\boot.lua"
@@ -238,7 +239,7 @@ static int l_send(lua_State *L)
 {
 	size_t len = 0;
 	const char *data = arg_string(L, 1, &len);
-	if (!data || !net_send(data, len)) {
+	if (!data || !net_send(NET_CH_LUA, data, len)) {
 		lua.pushnil(L);
 		return 1;
 	}
@@ -250,13 +251,20 @@ static int l_recv(lua_State *L)
 {
 	char *data;
 	size_t len;
-	if (!net_recv(&data, &len)) {
+	if (!net_recv(NET_CH_LUA, &data, &len)) {
 		lua.pushnil(L);
 		return 1;
 	}
 	lua.pushlstring(L, data, len);
 	net_free(data);
 	return 1;
+}
+
+/* ConquestNet_SetTunnel(1/0): route engine LAN discovery through the TCP peer */
+static int l_settunnel(lua_State *L)
+{
+	shim_set_tunnel(lua.gettop(L) >= 1 && lua.type(L, 1) != LUA_TNIL && lua.tonumber(L, 1) != 0.0f);
+	return 0;
 }
 
 static int l_localaddresses(lua_State *L)
@@ -357,6 +365,7 @@ static const struct {
 	{ "ConquestNet_Send",           l_send },
 	{ "ConquestNet_Recv",           l_recv },
 	{ "ConquestNet_LocalAddresses", l_localaddresses },
+	{ "ConquestNet_SetTunnel",      l_settunnel },
 	{ "ConquestNet_Time",           l_time },
 	{ "ConquestNet_SetValue",       l_setvalue },
 	{ "ConquestNet_GetValue",       l_getvalue },

@@ -42,7 +42,8 @@ static CRITICAL_SECTION g_lock;
 static INIT_ONCE g_init = INIT_ONCE_STATIC_INIT;
 static enum net_state g_state = NET_IDLE;
 static char g_detail[256];
-static struct queue g_inbox, g_outbox;
+static struct queue g_inbox[NET_CH_COUNT], g_outbox;
+static unsigned long g_peer_ipv4;   /* network byte order */
 static HANDLE g_thread;
 static volatile LONG g_generation;
 
@@ -94,7 +95,7 @@ static struct msg *msg_new(const char *data, size_t len)
 	if (!m)
 		return NULL;
 	m->len = len;
-	if (len)
+	if (data && len)
 		memcpy(m->data, data, len);
 	return m;
 }
@@ -154,6 +155,7 @@ static SOCKET accept_peer(struct thread_args *a)
 			if (s != INVALID_SOCKET) {
 				char ip[64];
 				inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof(ip));
+				g_peer_ipv4 = peer.sin_addr.s_addr;
 				set_state(a->generation, NET_CONNECTED, "connected to %s", ip);
 				break;
 			}
@@ -209,6 +211,8 @@ static SOCKET connect_peer(struct thread_args *a)
 		s = INVALID_SOCKET;
 	}
 connected:
+	if (s != INVALID_SOCKET && ai)
+		g_peer_ipv4 = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
 	freeaddrinfo(res);
 	if (s == INVALID_SOCKET) {
 		if (!stale(a->generation))
@@ -297,12 +301,12 @@ static void run_link(struct thread_args *a, SOCKET s)
 					}
 					if (rlen - pos - 4 < flen)
 						break;
-					if (flen) {
-						struct msg *m = msg_new((char *)rbuf + pos + 4, flen);
+					if (flen > 1 && rbuf[pos + 4] < NET_CH_COUNT) {
+						struct msg *m = msg_new((char *)rbuf + pos + 5, flen - 1);
 						if (m) {
 							EnterCriticalSection(&g_lock);
 							if (!stale(a->generation))
-								queue_push(&g_inbox, m);
+								queue_push(&g_inbox[rbuf[pos + 4]], m);
 							else
 								free(m);
 							LeaveCriticalSection(&g_lock);
@@ -359,8 +363,10 @@ static void stop_link(void)
 	InterlockedIncrement(&g_generation);
 	t = g_thread;
 	g_thread = NULL;
-	queue_clear(&g_inbox);
+	for (int i = 0; i < NET_CH_COUNT; i++)
+		queue_clear(&g_inbox[i]);
 	queue_clear(&g_outbox);
+	g_peer_ipv4 = 0;
 	LeaveCriticalSection(&g_lock);
 	if (t) {
 		WaitForSingleObject(t, 2000);
@@ -445,16 +451,18 @@ const char *net_state_name(enum net_state s)
 	return "unknown";
 }
 
-int net_send(const char *data, size_t len)
+int net_send(enum net_channel ch, const char *data, size_t len)
 {
 	struct msg *m;
 	int ok = 0;
-	if (!len || len > MAX_FRAME)
+	if (!len || len >= MAX_FRAME)
 		return 0;
 	ensure_init();
-	m = msg_new(data, len);
+	m = msg_new(NULL, len + 1);
 	if (!m)
 		return 0;
+	m->data[0] = (char)ch;
+	memcpy(m->data + 1, data, len);
 	EnterCriticalSection(&g_lock);
 	if (g_state == NET_CONNECTED) {
 		queue_push(&g_outbox, m);
@@ -466,12 +474,17 @@ int net_send(const char *data, size_t len)
 	return ok;
 }
 
-int net_recv(char **data, size_t *len)
+unsigned long net_peer_ipv4(void)
+{
+	return g_peer_ipv4;
+}
+
+int net_recv(enum net_channel ch, char **data, size_t *len)
 {
 	struct msg *m;
 	ensure_init();
 	EnterCriticalSection(&g_lock);
-	m = queue_pop(&g_inbox);
+	m = queue_pop(&g_inbox[ch]);
 	LeaveCriticalSection(&g_lock);
 	if (!m)
 		return 0;

@@ -21,12 +21,22 @@ void net_close(void);
 enum net_state net_status(char *buf, size_t buflen);
 const char *net_state_name(enum net_state s);
 
-/* Queue a message for sending. Returns 0 if not connected or out of memory. */
-int net_send(const char *data, size_t len);
+/* Each frame carries a one-byte channel so game packets and Lua messages share the link. */
+enum net_channel {
+	NET_CH_LUA,         /* ConquestNet_Send/Recv */
+	NET_CH_DISCOVERY,   /* tunnelled engine LAN discovery packets (shim.c) */
+	NET_CH_COUNT,
+};
 
-/* Pop the next received message. Caller frees *data with net_free. Returns 0 if none. */
-int  net_recv(char **data, size_t *len);
+/* Queue a message for sending. Returns 0 if not connected or out of memory. */
+int net_send(enum net_channel ch, const char *data, size_t len);
+
+/* Pop the next received message on a channel. Caller frees *data with net_free. Returns 0 if none. */
+int  net_recv(enum net_channel ch, char **data, size_t *len);
 void net_free(char *data);
+
+/* IPv4 address (network byte order) of the connected peer, or 0 if none. */
+unsigned long net_peer_ipv4(void);
 
 /* Comma-separated IPv4 addresses of this machine. */
 void net_local_addresses(char *buf, size_t buflen);

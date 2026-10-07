@@ -32,7 +32,7 @@ int main(int argc, char **argv)
 		}
 		if (s == NET_CLOSED || s == NET_ERROR)
 			break;
-		while (net_recv(&data, &len)) {
+		while (net_recv(NET_CH_LUA, &data, &len)) {
 			char reply[4096];
 			int n = snprintf(reply, sizeof(reply), "echo:%.*s", (int)len, data);
 			if (len == 4 && !memcmp(data, "quit", 4)) {
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
 				printf("quit\n");
 				return 0;
 			}
-			net_send(reply, (size_t)n);
+			net_send(NET_CH_LUA, reply, (size_t)n);
 			net_free(data);
 		}
 		Sleep(10);

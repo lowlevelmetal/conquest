@@ -5,6 +5,10 @@
 local log = ConquestNet_Log
 local stage = ConquestNet_GetValue("autotest_stage")
 local MAP = "cor1c_con"
+-- args: "<hold seconds> [connect type] [tunnel]"; "lan" selects the engine's own UDP
+-- transport, "tunnel" also serves LAN discovery to a mod peer over TCP port 24600
+local _, _, holdArg, connectArg, tunnelArg = string.find(ConquestNet_AutotestArgs or "", "^(%S*)%s*(%S*)%s*(%S*)")
+local CONNECT = (connectArg and connectArg ~= "") and connectArg or "direct"
 
 local function setStage(s)
 	ConquestNet_SetValue("autotest_stage", s)
@@ -48,7 +52,7 @@ if ConquestNet_Context == "mission" then
 					setStage("returning")
 					ScriptCB_QuitToShell()
 				end
-				local hold = tonumber(ConquestNet_AutotestArgs) or 10
+				local hold = tonumber(holdArg) or 10
 				log("autotest: ScriptPostLoad ran; forcing victory in " .. hold .. "s")
 				local t1 = CreateTimer("conquest_victory")
 				SetTimerValue(t1, hold)
@@ -100,8 +104,13 @@ end
 -- first shell load: host once the main menu is up
 local steps = {
 	function()
-		gOnlineServiceStr = "Direct"
-		ScriptCB_SetConnectType("direct")
+		if tunnelArg == "tunnel" then
+			log("autotest: mod server " .. tostring(ConquestNet_Host(24600)))
+			ConquestNet_SetTunnel(1)
+		end
+		gOnlineServiceStr = CONNECT == "lan" and "LAN" or "Direct"
+		ScriptCB_SetConnectType(CONNECT)
+		log("autotest: connect type " .. CONNECT)
 		ScriptCB_SetNetLoginName(ScriptCB_tounicode("ConquestHost"))
 		ScriptCB_OpenNetShell(1)
 	end,
