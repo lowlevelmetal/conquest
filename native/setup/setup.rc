@@ -1,0 +1,52 @@
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+#include "../version.h"
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "setup/setup.manifest"
+IDI_APP ICON "setup/conquest.ico"
+IDR_PAYLOAD RCDATA "build/payload.bin"
+
+IDD_SETUP DIALOGEX 0, 0, 320, 164
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "Online Galactic Conquest Setup"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Online Galactic Conquest", IDC_TITLE, 12, 7, 250, 14, SS_NOPREFIX
+    LTEXT           "", IDC_SUBTITLE, 12, 22, 250, 9, SS_NOPREFIX
+    CONTROL         "", -1, "Static", SS_ETCHEDHORZ, 0, HEADER_HEIGHT, 320, 1
+    LTEXT           "Setup adds two-player online Galactic Conquest to STAR WARS Battlefront II. Both players need to install it.", -1, 12, 47, 296, 18
+    LTEXT           "&Game folder:", -1, 12, 71, 296, 9
+    EDITTEXT        IDC_FOLDER, 12, 82, 240, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "&Browse...", IDC_BROWSE, 256, 82, 52, 14
+    LTEXT           "", IDC_STATUS, 12, 103, 296, 27, SS_NOPREFIX
+    CONTROL         "", -1, "Static", SS_ETCHEDHORZ, 0, 136, 320, 1
+    CONTROL         "<a>Read me</a>", IDC_README, "SysLink", WS_TABSTOP, 12, 147, 80, 9
+    PUSHBUTTON      "&Uninstall", IDC_UNINSTALL, 148, 144, 50, 14
+    DEFPUSHBUTTON   "&Install", IDC_INSTALL, 202, 144, 50, 14
+    PUSHBUTTON      "Close", IDCANCEL, 256, 144, 52, 14
+END
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     CONQUEST_VERSION_MAJOR, CONQUEST_VERSION_MINOR, CONQUEST_VERSION_PATCH, 0
+PRODUCTVERSION  CONQUEST_VERSION_MAJOR, CONQUEST_VERSION_MINOR, CONQUEST_VERSION_PATCH, 0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Online Galactic Conquest Setup"
+            VALUE "FileVersion", CONQUEST_VERSION
+            VALUE "ProductName", "Online Galactic Conquest"
+            VALUE "ProductVersion", CONQUEST_VERSION
+            VALUE "OriginalFilename", "OnlineGalacticConquest-Setup.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

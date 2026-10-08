@@ -5,12 +5,17 @@ Two players play one Galactic Conquest campaign over the internet, each
 commanding one faction. Battles are played together online.
 
 INSTALL (both players)
-  Windows: run install.bat. If the game is not in the default Steam folder,
-           drag the game folder onto install.bat. (Steam: right-click the
-           game > Manage > Browse local files shows the folder.)
-  Linux:   ./install.sh /path/to/steamapps/common/Battle
-  To remove: uninstall.bat / ./install.sh --uninstall, or use Steam's
-  "Verify integrity of game files".
+  Windows: run OnlineGalacticConquest-Setup.exe and choose Install. Setup
+           finds the game through Steam; if it does not, choose Browse and
+           pick the game folder (in Steam: right-click the game > Manage >
+           Browse local files). Run Setup again to update or uninstall.
+           If Windows SmartScreen says it protected your PC, choose
+           More info > Run anyway (Setup is not code-signed).
+           Without Setup: run install.bat from the zip. If the game is not
+           in the default Steam folder, drag the game folder onto it.
+  Linux:   ./install.sh /path/to/steamapps/common/Battle (from the zip)
+  To remove: Setup > Uninstall, uninstall.bat or ./install.sh --uninstall.
+  Steam's "Verify integrity of game files" also turns the mod off.
 
 PLAY
   Start Battlefront II, then Multiplayer > Galactic Conquest.
@@ -38,6 +43,7 @@ PORTS (host only)
 NOTES
   - Both players need the same version of this mod.
   - If the connection drops, the campaign ends for both players. The host
-    can save from the pause menu.
+    can save from the pause menu, but a saved campaign cannot be resumed
+    online yet.
   - A log is written to conquest.log in the game folder; include it when
     reporting a problem.

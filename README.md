@@ -3,6 +3,21 @@
 Galactic Conquest multiplayer mod for *STAR WARS Battlefront II* in the
 *Battlefront Classic Collection* (Steam app 2446550).
 
+## Install
+
+Download the latest release. On Windows, run
+`OnlineGalacticConquest-Setup-<version>.exe`; it finds the game through Steam
+and installs, updates or removes the mod. On Linux, unzip the release and run
+`./install.sh /path/to/steamapps/common/Battle`. [`dist/README.txt`](dist/README.txt)
+is the player guide (hosting, ports, play).
+
+## Building
+
+`make -C native` cross-compiles the loader (`dle_crashpad.dll`) and the Windows
+setup program with mingw-w64. `tools/package.sh` writes the release files to
+`native/build/release/`. The version number lives in `native/version.h`, and
+`tools/make_icon.sh` redraws the setup icon (needs ImageMagick).
+
 ## Tooling
 
 The Classic Collection's shell (`data2/_lvl_common/shell.lvl`) holds the

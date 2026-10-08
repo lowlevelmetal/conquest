@@ -13,8 +13,8 @@
 #include "log.h"
 #include "net.h"
 #include "shim.h"
+#include "version.h"
 
-#define CONQUEST_VERSION "0.1.0"
 #define BOOT_SCRIPT "lua\\boot.lua"
 #define MAX_VALUES 64
 
