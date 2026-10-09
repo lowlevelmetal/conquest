@@ -80,7 +80,7 @@ if ConquestNet_Context == "mission" then
 		-- screen's CurButton when the accept key is held: a team on the side
 		-- screen, "_ok" for Spawn on the unit screen)
 		local battleTick = ConquestNet_Tick
-		local lastScreen, pressAt, presses, humansAtUnitScreen
+		local lastScreen, pressAt, presses, humansAtUnitScreen, sideShotAt
 		local lastHumans, nextCount = -1, 0
 		local function screenName(screen)
 			for k, v in pairs(_G) do
@@ -132,6 +132,22 @@ if ConquestNet_Context == "mission" then
 				log("autotest: battle screen " .. name)
 				pressAt, presses = now + 2, 0
 				humansAtUnitScreen = lastHumans
+				if string.find(name, "^ifs_sideselect") and screen.buttons then
+					-- which choices the player has (dimmed ones can't be picked)
+					local states = {}
+					for _, tag in ipairs({ "team1", "team2", "auto", "spec" }) do
+						local b = screen.buttons[tag]
+						table.insert(states, tag .. "=" .. (not b and "none" or b.hidden and "hidden"
+							or b.bDimmed and "dimmed" or "open"))
+					end
+					log("autotest: side buttons " .. table.concat(states, " ") .. ", selected " .. tostring(screen.CurButton))
+					-- a screenshot once the menu has settled, then the press
+					sideShotAt, pressAt = now + 4, now + 6
+				end
+			end
+			if sideShotAt and now >= sideShotAt then
+				sideShotAt = nil
+				log("tour: shot sides_" .. role)
 			end
 			local onSides = string.find(name, "^ifs_sideselect")
 			local onMap = string.find(name, "^ifs_mapselect")

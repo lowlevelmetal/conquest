@@ -30,7 +30,8 @@ PLAY
   The Republic or Rebels move first. On your turn, play as usual. On the
   other player's turn you watch the galaxy until they finish. In a battle
   the defender picks the battle type, each side picks its own bonus card,
-  and then both players load into the battle together.
+  and then both players load into the battle together. In the battle each
+  player can only join their own faction.
   The host's game decides every battle. If the host quits a battle before
   it is decided, the other player wins it. If the joining player quits a
   battle, the host plays on and the result still counts.

@@ -60,10 +60,54 @@ end
 log("battle " .. tostring(session.battle.mission) .. " as " .. tostring(session.role))
 
 -- Put each player on their own faction: the engine joins the team named by
--- ifs_sideselect<N>.CurButton when the player confirms, so preselect it when
--- the screen appears. The in-game screens load after setup_teams, so hook
--- their script load.
+-- ifs_sideselect<N>.CurButton when the player confirms. Every other choice
+-- (the other faction, Auto Assign, Spectate) is dimmed, as the stock screen
+-- does for a full team: dimmed buttons are drawn grey and skipped by the
+-- mouse and the keys, so the player's own faction is the only one to pick.
+-- The in-game screens load after setup_teams, so hook their script load.
 local myTag = "team" .. tostring(session.myTeam)
+local SIDE_BUTTONS = { "team1", "team2", "auto", "spec" }
+
+local function ownSideOnly(this)
+	local buttons = this.buttons
+	if not buttons or not buttons[myTag] or buttons[myTag].hidden then
+		return
+	end
+	for _, tag in ipairs(SIDE_BUTTONS) do
+		if buttons[tag] and tag ~= myTag then
+			buttons[tag].bDimmed = 1
+		end
+	end
+	if ifs_sideselect_vbutton_layout then
+		-- lays the buttons out again, now drawing the dimmed ones grey
+		ShowHideVerticalButtons(buttons, ifs_sideselect_vbutton_layout)
+	end
+	this.CurButton = myTag
+	if this.Viewport then
+		SetCurButton(myTag, this)
+	else
+		SetCurButton(myTag)
+	end
+	this.cgcOwnSide = true
+	log("side select: only " .. myTag .. " can be picked")
+end
+
+-- The engine rewrites the team labels as players join ("CIS (1)"), which
+-- turns their text white again: keep the dimmed ones grey while the screen
+-- is up (called from the per-frame tick).
+local function keepSidesDimmed()
+	local screen = gCurScreenTable
+	if not (screen and screen.cgcOwnSide and screen.buttons) then
+		return
+	end
+	for _, tag in ipairs(SIDE_BUTTONS) do
+		local button = screen.buttons[tag]
+		if button and button.bDimmed and button.label then
+			IFFlashyText_fnSetTextColor(button.label, 110, 110, 110)
+		end
+	end
+end
+
 local afterDoFile = ConquestNet_AfterDoFile
 ConquestNet_AfterDoFile = function(name)
 	afterDoFile(name)
@@ -76,12 +120,7 @@ ConquestNet_AfterDoFile = function(name)
 			local enter = screen.Enter
 			screen.Enter = function(this, bFwd)
 				enter(this, bFwd)
-				local button = this.buttons and this.buttons[myTag]
-				if button and not button.hidden then
-					this.CurButton = myTag
-					SetCurButton(myTag)
-					log("side select: preselected " .. myTag)
-				end
+				ownSideOnly(this)
 			end
 		end
 	end
@@ -157,6 +196,7 @@ if not host then
 		if leaving then
 			return
 		end
+		keepSidesDimmed()
 		local msg = receive()
 		while msg do
 			if msg.kind == "end" then
@@ -185,6 +225,7 @@ ConquestNet_Tick = function()
 	if leaving then
 		return
 	end
+	keepSidesDimmed()
 	local msg = receive()
 	while msg do
 		if msg.kind == "left" then
