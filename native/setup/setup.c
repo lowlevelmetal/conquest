@@ -119,19 +119,31 @@ static char *read_file(const wchar_t *path, DWORD *size)
 	return buf;
 }
 
-static BOOL is_loader(const wchar_t *path)
+enum dll_kind { DLL_MISSING, DLL_LOADER, DLL_OTHER, DLL_UNREADABLE };
+
+/* What a dle_crashpad.dll is: ours, Aspyr's (or anything else), or a file we
+ * could not read, which must not be mistaken for either. */
+static enum dll_kind dll_kind(const wchar_t *path)
 {
 	size_t n = sizeof(LOADER_MARKER) - 1;
 	DWORD size = 0, i;
-	char *buf = read_file(path, &size);
+	char *buf;
 	BOOL found = FALSE;
 
+	if (!is_file(path))
+		return DLL_MISSING;
+	buf = read_file(path, &size);
 	if (!buf)
-		return FALSE;
+		return DLL_UNREADABLE;
 	for (i = 0; !found && i + n <= size; i++)
 		found = buf[i] == LOADER_MARKER[0] && !memcmp(buf + i, LOADER_MARKER, n);
 	HeapFree(GetProcessHeap(), 0, buf);
-	return found;
+	return found ? DLL_LOADER : DLL_OTHER;
+}
+
+static BOOL is_loader(const wchar_t *path)
+{
+	return dll_kind(path) == DLL_LOADER;
 }
 
 static BOOL make_parent_dirs(const wchar_t *file)
@@ -163,28 +175,39 @@ static BOOL make_parent_dirs(const wchar_t *file)
 }
 
 /* Write through a temporary file so a failure never leaves half a file. */
-static BOOL write_file(const wchar_t *path, const void *data, DWORD size)
+/* Write data to tmp (the caller moves it into place). */
+static BOOL write_temp(const wchar_t *tmp, const wchar_t *path, const void *data, DWORD size)
 {
-	wchar_t tmp[PATHLEN];
 	HANDLE f;
 	DWORD wrote = 0, err;
 	BOOL ok;
 
-	if (!PATHF(tmp, L"%ls.new", path))
-		return fail(0, L"The path is too long:\n%ls", path);
 	if (!make_parent_dirs(path))
 		return FALSE;
 	f = CreateFileW(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (f == INVALID_HANDLE_VALUE)
 		return fail(GetLastError(), L"Could not write %ls.", path);
-	ok = WriteFile(f, data, size, &wrote, NULL) && wrote == size;
+	ok = WriteFile(f, data, size, &wrote, NULL) && wrote == size && FlushFileBuffers(f);
 	err = GetLastError();
 	CloseHandle(f);
-	if (ok && !MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-		ok = FALSE;
-		err = GetLastError();
-	}
 	if (!ok) {
+		DeleteFileW(tmp);
+		return fail(err, L"Could not write %ls.", path);
+	}
+	return TRUE;
+}
+
+static BOOL write_file(const wchar_t *path, const void *data, DWORD size)
+{
+	wchar_t tmp[PATHLEN];
+	DWORD err;
+
+	if (!PATHF(tmp, L"%ls.new", path))
+		return fail(0, L"The path is too long:\n%ls", path);
+	if (!write_temp(tmp, path, data, size))
+		return FALSE;
+	if (!MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		err = GetLastError();
 		DeleteFileW(tmp);
 		return fail(err, L"Could not write %ls.", path);
 	}
@@ -489,6 +512,38 @@ static BOOL check_folder(const wchar_t *dir)
 	return TRUE;
 }
 
+static BOOL install_loader(const wchar_t *path, const wchar_t *orig, const BYTE *dll, DWORD dll_size)
+{
+	wchar_t tmp[PATHLEN];
+	enum dll_kind kind = dll_kind(path);
+	BOOL moved = FALSE;
+	DWORD err;
+
+	if (kind == DLL_UNREADABLE)
+		return fail(GetLastError(), L"Could not read %ls. Close the game, then try again.", path);
+	if (!PATHF(tmp, L"%ls.new", path))
+		return fail(0, L"The game folder path is too long.");
+	if (!write_temp(tmp, path, dll, dll_size))
+		return FALSE;
+	if (kind == DLL_OTHER) {
+		if (!MoveFileExW(path, orig, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+			err = GetLastError();
+			DeleteFileW(tmp);
+			return fail(err, L"Could not rename %ls.", path);
+		}
+		moved = TRUE;
+	}
+	if (!MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		err = GetLastError();
+		/* put Aspyr's DLL back so the game still starts */
+		if (moved)
+			MoveFileExW(orig, path, MOVEFILE_WRITE_THROUGH);
+		DeleteFileW(tmp);
+		return fail(err, L"Could not write %ls.", path);
+	}
+	return TRUE;
+}
+
 static BOOL do_install(const wchar_t *dir)
 {
 	wchar_t path[PATHLEN], orig[PATHLEN];
@@ -523,30 +578,34 @@ static BOOL do_install(const wchar_t *dir)
 
 	/* The loader goes last: until it is in place the game ignores conquest\.
 	 * If the current DLL is Aspyr's crash reporter (first install, or a game
-	 * update restored it) it becomes the backup the loader forwards to. */
+	 * update restored it) it becomes the backup the loader forwards to. The
+	 * game cannot start without a dle_crashpad.dll, so the loader is written
+	 * in full first and Aspyr's DLL is only moved once it can be replaced. */
 	PATHF(path, L"%ls\\dle_crashpad.dll", dir);
-	if (is_file(path) && !is_loader(path) && !MoveFileExW(path, orig, MOVEFILE_REPLACE_EXISTING))
-		return fail(GetLastError(), L"Could not rename %ls.", path);
-	return write_file(path, dll, dll_size);
+	return install_loader(path, orig, dll, dll_size);
 }
 
 static BOOL do_uninstall(const wchar_t *dir)
 {
 	wchar_t dll[PATHLEN], orig[PATHLEN], path[PATHLEN];
+	enum dll_kind kind;
 
 	if (!check_folder(dir))
 		return FALSE;
 	if (!PATHF(dll, L"%ls\\dle_crashpad.dll", dir) || !PATHF(orig, L"%ls\\dle_crashpad_orig.dll", dir))
 		return fail(0, L"The game folder path is too long.");
+	kind = dll_kind(dll);
+	if (kind == DLL_UNREADABLE)
+		return fail(GetLastError(), L"Could not read %ls. Close the game, then try again.", dll);
 	if (is_file(orig)) {
-		if (!is_file(dll) || is_loader(dll)) {
+		if (kind != DLL_OTHER) {
 			if (!MoveFileExW(orig, dll, MOVEFILE_REPLACE_EXISTING))
 				return fail(GetLastError(), L"Could not restore %ls.", dll);
 		} else if (!DeleteFileW(orig)) {
 			/* a game update already put Aspyr's DLL back; the backup is stale */
 			return fail(GetLastError(), L"Could not remove %ls.", orig);
 		}
-	} else if (is_loader(dll) && !DeleteFileW(dll)) {
+	} else if (kind == DLL_LOADER && !DeleteFileW(dll)) {
 		return fail(GetLastError(), L"Could not remove %ls.", dll);
 	}
 	PATHF(path, L"%ls\\conquest", dir);
@@ -920,6 +979,18 @@ static void report_error(BOOL quiet)
 	}
 }
 
+/* The setup usually runs from Downloads: never load a DLL from there (or the
+ * current folder) that Windows or a system component asks for by name. */
+static void harden_dll_search(void)
+{
+	typedef BOOL (WINAPI *SetDefaultDllDirectories_t)(DWORD);
+	SetDefaultDllDirectories_t set_default = (SetDefaultDllDirectories_t)(void *)
+		GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetDefaultDllDirectories");
+	if (set_default)
+		set_default(LOAD_LIBRARY_SEARCH_SYSTEM32);
+	SetDllDirectoryW(L"");
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
 {
 	INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES | ICC_LINK_CLASS };
@@ -931,6 +1002,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdline, int show)
 	(void)prev;
 	(void)cmdline;
 	(void)show;
+	harden_dll_search();
 	argv = CommandLineToArgvW(GetCommandLineW(), &argc);
 	for (i = 1; argv && i < argc; i++) {
 		if (!_wcsicmp(argv[i], L"/install") || !_wcsicmp(argv[i], L"/uninstall"))

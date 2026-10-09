@@ -52,4 +52,8 @@ void bridge_register(lua_State *L);
 /* Called after every ScriptCB_DoFile(name) so Lua can hook script loads. */
 void bridge_after_dofile(lua_State *L, const char *name);
 
+/* Battlefront2.dll is being unloaded: drop all state tied to it. */
+void bridge_unload(void);
+void game_unload(void);
+
 #endif

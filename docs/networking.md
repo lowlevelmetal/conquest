@@ -83,20 +83,56 @@ UDP 3658 and the mod's TCP port.
   `SetAmHost(1)`, `SetGameName("...")` (plain string, not unicode),
   `SetGameRules("mp")`, `SetNetGameDefaults(p)`, `SetDedicated(nil)`,
   `BeginLobby()`, then `UpdateLobby(nil)` + `LaunchLobby()` per tick.
-* `MissionVictory` is registered after `setup_teams` loads; wrap it from
-  `ScriptPostLoad`. `ScriptCB_QuitToShell()` right after victory returns to
-  the shell without map rotation, and `ScriptCB_GetLastBattleVictory()` then
-  reports the winner on the host.
+* `MissionVictory` and `MissionDefeat` are registered after `setup_teams`
+  loads; wrap them from `ScriptPostLoad`. Battles end three ways: a side
+  wins (`MissionVictory(team)`), a time limit ends in a tie
+  (`MissionVictory({1,2})`), or a side runs out of reinforcements
+  (`MissionDefeat(team)`, the usual end of a conquest battle).
+  `ScriptCB_QuitToShell()` right after the end returns to the shell without
+  map rotation, and `ScriptCB_GetLastBattleVictory()` then reports the
+  winner on the host. The client never runs the battle's logic, so the host
+  sends that value from the shell (`result {winner}`) and the client uses it
+  as is; the in-battle `end` message only tells the client to leave. A
+  battle the host leaves undecided reads -1 ("not fought"), after which
+  the stock galaxy starts it over at once on each machine, out of step;
+  online the mod reports it as won by the client instead (forfeit).
+* A battle's end leaves engine network errors behind on the client ("The
+  session has ended because the host has left"). Every shell screen opens
+  the engine's error box from `ScriptCB_GetLatestError()`
+  (`gIFShellScreenTemplate_CommonUpdate`), and while it is open the screen
+  under it gets no `Update`. During an online campaign the mod clears them
+  (`ScriptCB_ClearError`) except on the battle launch and join screens.
+* Side select, the spawn map and the unit screen confirm on a held accept
+  key (about 0.125 s): the engine then reads the screen's `CurButton` (a
+  team, or `_ok` for Spawn). Keys come from `SDL_GetKeyboardState`, not key
+  events; test copies press keys through `native/testwin.c`.
 
 ## Lobby protocol (mod link)
 
 The Galactic Conquest lobby runs over the mod's TCP link before any engine
 session exists. The joining player sends `hello {protocol, version, name}`;
-the host answers `setup {scenario, hostTeam, name}` or `refuse {reason}`
-(`version`), so the joiner takes the side the host left free. `ping`/`pong
-{t}` fill the lobby's Ping column, `start` launches the campaign on both
-machines and `bye` leaves the lobby. The host drops a connection that sends
-no `hello` within 10 s and listens again whenever the other player leaves.
+the host answers `setup {scenario, hostTeam, name, udp}` or `refuse {reason}`
+(`version` for another protocol or mod version, `full`), so the joiner takes
+the side the host left free. `ping`/`pong {t}` fill the lobby's Ping column,
+`udp {ok}` reports the battle-port check, `start` launches the campaign on
+both machines and `bye` leaves the lobby.
+
+Messages are Lua table constructors (`CGC.Serialize`) but are parsed as data
+only (`CGC.Deserialize` never runs them), and each kind's fields are checked
+before a screen sees it (`link.lua`). The native link caps a message at
+1 MiB and the queue at 1024 messages.
+
+The host's port stays open for the whole lobby (`net.c`). A new connection
+waits as pending until it sends its first message; only then does it become
+the player, so connections that stay silent cannot take the slot. One that
+arrives while a player is connected is refused as `full`. Lua drops a player
+whose first message is not `hello` and takes the next with
+`ConquestNet_AcceptNext()`. Closing a connection still sends what was queued
+for it, so `bye`, `quit` and `refuse` arrive.
+
+While the lobby is open the host answers a small UDP probe on 3658 (`udp.c`)
+and the joining player sends a few: no answer means battles will not
+connect, which both lobbies show before the campaign starts.
 
 ## Shell UI notes
 

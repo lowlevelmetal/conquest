@@ -26,33 +26,59 @@ static void describe(void *addr, char *buf, size_t len)
 	}
 }
 
+/*
+ * A vectored handler sees every exception first, including the many the game
+ * or Steam catch themselves (C++ throws among them). Each place that raises
+ * one is logged once, so those cannot use up the log before a real crash.
+ */
+#define MAX_SITES 64
+
 static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 {
-	static volatile LONG reported;
+	static struct { DWORD code; void *addr; } sites[MAX_SITES];
+	static volatile LONG nsites, busy;
 	DWORD code = info->ExceptionRecord->ExceptionCode;
+	void *addr = info->ExceptionRecord->ExceptionAddress;
 	void *frames[24];
 	char where[300];
 	USHORT n;
+	LONG i, count;
 
 	/* fatal-class exceptions and C++ throws (0xE06D7363); skip debugger noise */
 	if (((code & 0xF0000000u) != 0xC0000000u && code != 0xE06D7363u) || code == 0xC0000374u)
 		return EXCEPTION_CONTINUE_SEARCH;
-	if (InterlockedIncrement(&reported) > 3)
+	if (InterlockedExchange(&busy, 1))
+		return EXCEPTION_CONTINUE_SEARCH;   /* another thread is logging (or we faulted while logging) */
+	count = nsites;
+	for (i = 0; i < count; i++)
+		if (sites[i].code == code && sites[i].addr == addr)
+			break;
+	if (i < count || count == MAX_SITES) {
+		InterlockedExchange(&busy, 0);
 		return EXCEPTION_CONTINUE_SEARCH;
+	}
+	sites[count].code = code;
+	sites[count].addr = addr;
+	InterlockedExchange(&nsites, count + 1);
 
-	describe(info->ExceptionRecord->ExceptionAddress, where, sizeof(where));
+	describe(addr, where, sizeof(where));
 	if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2)
 		log_printf("crash: access violation (%s %#llx) at %s",
 		           info->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
 		           (unsigned long long)info->ExceptionRecord->ExceptionInformation[1], where);
 	else
-		log_printf("crash: exception %#lx at %s", (unsigned long)code, where);
+		log_printf("crash: exception %#lx at %s%s", (unsigned long)code, where,
+		           code == 0xE06D7363u ? " (C++ throw, usually caught)" : "");
 
-	n = RtlCaptureStackBackTrace(0, 24, frames, NULL);
-	for (USHORT i = 0; i < n; i++) {
-		describe(frames[i], where, sizeof(where));
-		log_printf("crash:   #%u %s", i, where);
+	/* C++ throws are nearly always caught: the place is enough */
+	if (code != 0xE06D7363u) {
+		n = RtlCaptureStackBackTrace(0, 24, frames, NULL);
+		for (USHORT j = 0; j < n; j++) {
+			describe(frames[j], where, sizeof(where));
+			log_printf("crash:   #%u %s", j, where);
+		}
 	}
+	InterlockedExchange(&busy, 0);
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 

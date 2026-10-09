@@ -18,6 +18,13 @@ setup program with mingw-w64. `tools/package.sh` writes the release files to
 `native/build/release/`. The version number lives in `native/version.h`, and
 `tools/make_icon.sh` redraws the setup icon (needs ImageMagick).
 
+`make -C native test` checks the network code under Wine. `native/test/` also
+holds checks that run against the game: `reload_test.c` (back to game select),
+`crash_test.c` (the crash log) and `lobby_peer.py` (strangers and old versions
+at a host's lobby). Two local copies of the game play each other with
+`tools/run_pair.sh` and the `cgc_play` autotest (`mod/lua/tests/cgc_play.lua`
+lists its options).
+
 ## Tooling
 
 The Classic Collection's shell (`data2/_lvl_common/shell.lvl`) holds the

@@ -13,8 +13,13 @@ enum net_state {
 	NET_ERROR,
 };
 
+/* Host: opens the port at once (0 and an error if it can't) and takes the first
+ * connection that sends a message as the peer. */
 int  net_host(unsigned short port, char *err, size_t errlen);
 int  net_connect(const char *host, unsigned short port, char *err, size_t errlen);
+/* Host: drop the current peer (if any) and take the next one. 0 if not hosting. */
+int  net_accept_next(void);
+/* Messages already queued still go out, in the background. */
 void net_close(void);
 
 /* Returns the current state; copies a human-readable detail into buf. */

@@ -25,12 +25,19 @@ typedef INT_PTR (*GameWinMain_t)(void *, void *, void *, void *, void *, int, vo
 typedef HMODULE (WINAPI *LoadLibraryW_t)(LPCWSTR);
 typedef HMODULE (WINAPI *LoadLibraryExA_t)(LPCSTR, HANDLE, DWORD);
 typedef HMODULE (WINAPI *LoadLibraryExW_t)(LPCWSTR, HANDLE, DWORD);
+typedef BOOL (WINAPI *FreeLibrary_t)(HMODULE);
+
+/* Lets dist/install.bat tell this loader from Aspyr's DLL with findstr. On a
+ * line of its own, so a line-based search finds it inside a binary file. */
+__attribute__((used)) static const char g_loader_marker[] = "\r\nOnlineGalacticConquestLoader\r\n";
 
 static LoadLibraryA_t real_LoadLibraryA;
 static LoadLibraryW_t real_LoadLibraryW;
 static LoadLibraryExA_t real_LoadLibraryExA;
 static LoadLibraryExW_t real_LoadLibraryExW;
+static FreeLibrary_t real_FreeLibrary;
 static volatile LONG g_patched;
+static HMODULE g_bf2;
 static GetProcAddress_t real_GetProcAddress;
 static GameWinMain_t real_GameWinMain;
 
@@ -68,6 +75,7 @@ static void on_loaded(HMODULE mod)
 		return;
 	if (InterlockedExchange(&g_patched, 1))
 		return;
+	g_bf2 = mod;
 	log_printf("proxy: Battlefront2.dll loaded at %p", (void *)mod);
 	crash_hook_exits(mod);
 	crash_hook_exits(GetModuleHandleA("steam_api64.dll"));
@@ -106,6 +114,24 @@ static HMODULE WINAPI hook_LoadLibraryExW(LPCWSTR name, HANDLE file, DWORD flags
 	return m;
 }
 
+/* "Back to game select" unloads Battlefront2.dll, and choosing a game loads
+ * it again: a fresh copy that must be patched again. */
+static BOOL WINAPI hook_FreeLibrary(HMODULE mod)
+{
+	BOOL r;
+	int ours = g_patched && mod && mod == g_bf2;
+	r = real_FreeLibrary(mod);
+	if (ours && !GetModuleHandleA("Battlefront2.dll")) {
+		log_printf("proxy: Battlefront2.dll unloaded; it will be patched again when it loads");
+		bridge_unload();
+		shim_unload();
+		game_unload();
+		g_bf2 = NULL;
+		InterlockedExchange(&g_patched, 0);
+	}
+	return r;
+}
+
 /* Replace imports by name in the executable's import table. */
 static void hook_imports(HMODULE exe)
 {
@@ -119,6 +145,7 @@ static void hook_imports(HMODULE exe)
 		{ "LoadLibraryExA", (void *)hook_LoadLibraryExA, (void **)&real_LoadLibraryExA },
 		{ "LoadLibraryExW", (void *)hook_LoadLibraryExW, (void **)&real_LoadLibraryExW },
 		{ "GetProcAddress", (void *)hook_GetProcAddress, (void **)&real_GetProcAddress },
+		{ "FreeLibrary",    (void *)hook_FreeLibrary,    (void **)&real_FreeLibrary },
 	};
 	BYTE *base = (BYTE *)exe;
 	IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);

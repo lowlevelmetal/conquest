@@ -11,7 +11,8 @@
 --   mode    {mission}          defender's chosen game mode
 --   card    {team, slot}       a side's bonus card (slot 0 = none)
 --   launch  {mission}          host started the battle server (client joins)
---   result  {winner}           host's battle result
+--   end                        the battle is over (client leaves it)
+--   result  {winner}           the winner as the host's game recorded it
 --   quit                       the other player left
 
 local function U(text)
@@ -43,6 +44,38 @@ function CGC.Snapshot()
 		planetNext = ifs_freeform_fleet.planetNext,
 	}
 	return s
+end
+
+-- A snapshot from the other player, checked before it replaces ours: the
+-- parts the galaxy code indexes must be there, with known planets and teams.
+local function isTeamValue(v)
+	return v == 0 or v == 1 or v == 2
+end
+
+local function knownPlace(planet)
+	return type(planet) == "string" and (not main.modelMatrix or main.modelMatrix[planet] ~= nil)
+end
+
+function CGC.CheckSnapshot(s)
+	if (s.playerTeam ~= 1 and s.playerTeam ~= 2) or type(s.turnNumber) ~= "number" then
+		return false
+	end
+	if type(s.fleetMove) ~= "table" or type(s.planetTeam) ~= "table" or type(s.planetFleet) ~= "table" then
+		return false
+	end
+	for _, field in ipairs({ "planetTeam", "planetFleet" }) do
+		for planet, team in pairs(s[field]) do
+			if not knownPlace(planet) or not isTeamValue(team) then
+				return false
+			end
+		end
+	end
+	for _, field in ipairs({ "unitOwned", "techCards", "techUsing" }) do
+		if s[field] ~= nil and type(s[field]) ~= "table" then
+			return false
+		end
+	end
+	return true
 end
 
 -- Recreate fleet models from planetFleet (same as ifs_freeform_main.Enter).
@@ -100,6 +133,9 @@ end
 function CGC.StartGame()
 	local s = CGC.session
 	CGC.Log("starting " .. s.scenario .. " as team " .. s.myTeam)
+	CGC.linkLostShown = nil
+	ConquestNet_EchoUdp(nil)
+	ConquestNet_ProbeUdp(nil)
 	s.started = true
 	CGC.SaveSession()
 	ConquestNet_SetTunnel(1)
@@ -149,32 +185,68 @@ main.PromptSave = function(this, force)
 	return promptSave(this, force)
 end
 
--- the client never runs the battle's mission logic; the host tells it who won
+-- The battle's result comes from the host's game: back in the galaxy it sends
+-- what ScriptCB_GetLastBattleVictory reports there (CGC.SendBattleResult),
+-- and the client uses exactly that, so both apply the same result.
+
+function CGC.SendBattleResult()
+	local s = CGC.session
+	if s.role ~= "host" or not s.battle then
+		return
+	end
+	local winner = ScriptCB_GetLastBattleVictory()
+	CGC.Log("battle result: " .. tostring(winner))
+	CGC.Send("result", { winner = winner })
+end
+
+-- client: the host's result for the battle just fought, once it has arrived
+function CGC.ClientBattleResult()
+	local battle = CGC.session.battle
+	if battle.winner == nil then
+		local msg = CGC.Take("result")
+		if msg then
+			battle.winner = msg.winner
+			CGC.SaveSession()
+			CGC.Log("battle result from host: " .. tostring(msg.winner))
+		end
+	end
+	return battle.winner
+end
+
+-- the stock code asks more than once (LoadState, then Enter); the answer is
+-- kept until Enter has applied it and cleared session.battle
 local lastBattleVictory = ScriptCB_GetLastBattleVictory
 ScriptCB_GetLastBattleVictory = function()
-	local battleInfo = CGC.Active() and CGC.session.role == "client" and CGC.session.battle
-	if battleInfo then
-		-- the stock code asks more than once (LoadState, then Enter); keep the
-		-- answer until Enter has applied it and cleared session.battle
-		if not battleInfo.winner then
-			-- normally the battle script already received the host's result
-			battleInfo.winner = tonumber(ConquestNet_GetValue("cgc_winner"))
-			ConquestNet_SetValue("cgc_winner", nil)
-		end
-		if not battleInfo.winner then
-			-- otherwise it is on its way: the link thread keeps receiving while we wait
-			local msg = CGC.Take("result")
-			local deadline = ConquestNet_Time() + 10
-			while not msg and not CGC.LinkLost() and ConquestNet_Time() < deadline do
-				msg = CGC.Take("result")
-			end
-			battleInfo.winner = msg and msg.winner
-			CGC.SaveSession()
-			CGC.Log("battle winner from host: " .. tostring(battleInfo.winner))
-		end
-		return battleInfo.winner or 0
+	if not (CGC.Active() and CGC.session.battle) then
+		return lastBattleVictory()
 	end
-	return lastBattleVictory()
+	if CGC.session.role == "client" then
+		-- Without the result yet: LoadState asks early (it only acts on a
+		-- negative winner), and the galaxy itself is held back on
+		-- ifs_cgc_result until the result is in (or the link is gone)
+		return CGC.ClientBattleResult() or 0
+	end
+	local winner = lastBattleVictory()
+	if winner < 0 then
+		-- The host left the battle before it was decided (its pause menu).
+		-- Offline the galaxy starts such a battle over at once, which two
+		-- machines cannot do in step; online, leaving forfeits the battle.
+		return 3 - CGC.session.myTeam
+	end
+	return winner
+end
+
+-- After a battle the shell goes straight back into the galaxy. The client
+-- usually gets there before the host, so it waits on ifs_cgc_result for the
+-- host's result instead of entering the galaxy without it.
+local movietrans = ifs_movietrans_PushScreen
+ifs_movietrans_PushScreen = function(screen)
+	if screen == main and CGC.Active() and CGC.session.role == "client" and CGC.session.battle
+		and CGC.ClientBattleResult() == nil and not CGC.LinkLost() then
+		ifs_cgc_result.restart = nil
+		return ScriptCB_PushScreen("ifs_cgc_result")
+	end
+	return movietrans(screen)
 end
 
 -- the opponent's turn: wait for their messages ------------------------------------------
@@ -243,22 +315,26 @@ ifs_cgc_wait = NewIFShellScreen {
 
 	Update = function(this, fDt)
 		gIFShellScreenTemplate_fnUpdate(this, fDt)
-		main:UpdateZoom()
-		main:DrawLanes(nil, nil)
-		main:DrawPlanetIcons()
-		main:DrawFleetIcons(main.planetSelected, nil)
+		CGC.Try("waiting screen", function()
+			main:UpdateZoom()
+			main:DrawLanes(nil, nil)
+			main:DrawPlanetIcons()
+			main:DrawFleetIcons(main.planetSelected, nil)
+		end)
 
 		local msg = CGC.Take("turn", "battle")
 		if not msg then
 			return
 		end
-		CGC.ApplySnapshot(msg.state)
-		if msg.kind == "turn" then
-			main:NextTurn()
-		else
-			CGC.battleRemote = true
-			ScriptCB_PushScreen("ifs_freeform_battle")
-		end
+		CGC.Try("applying the other player's " .. msg.kind, function()
+			CGC.ApplySnapshot(msg.state)
+			if msg.kind == "turn" then
+				main:NextTurn()
+			else
+				CGC.battleRemote = true
+				ScriptCB_PushScreen("ifs_freeform_battle")
+			end
+		end)
 	end,
 
 	Input_Accept = function(this) end,
@@ -269,6 +345,93 @@ ifs_cgc_wait = NewIFShellScreen {
 }
 ifs_freeform_AddCommonElements(ifs_cgc_wait)
 AddIFScreen(ifs_cgc_wait, "ifs_cgc_wait")
+
+-- client: waiting for the host's battle result -------------------------------------------
+-- Shown after a battle until the result arrives, or (restart = true) while the
+-- host plays a battle the client could not join; the shell then restarts into
+-- the galaxy as it does after a battle.
+
+ifs_cgc_result = NewIFShellScreen {
+	nologo = 1,
+	movieIntro = nil,
+	movieBackground = nil,
+	bg_texture = "iface_bgmeta_space",
+	bNohelptext_accept = 1,
+
+	title = NewIFText {
+		font = "gamefont_large",
+		textw = 460,
+		y = 0,
+		ScreenRelativeX = 0.5,
+		ScreenRelativeY = 0.3,
+		nocreatebackground = 1,
+	},
+	text = NewIFText {
+		font = "gamefont_medium",
+		textw = 600,
+		texth = 120,
+		x = -300,
+		y = 50,
+		ScreenRelativeX = 0.5,
+		ScreenRelativeY = 0.3,
+		halign = "hcenter",
+		valign = "top",
+		nocreatebackground = 1,
+	},
+
+	Enter = function(this, bFwd)
+		gIFShellScreenTemplate_fnEnter(this, bFwd)
+		if not bFwd then
+			-- the galaxy was entered from here and has gone: nothing to wait for
+			ScriptCB_PopScreen()
+			return
+		end
+		this.done = nil
+		IFText_fnSetUString(this.title, U("Waiting for " .. opponentName()))
+		IFText_fnSetUString(this.text, U(this.restart and (opponentName() .. " is playing this battle without you.")
+			or (opponentName() .. " is finishing the battle.")))
+		CGC.Log("waiting for the host's battle result")
+	end,
+
+	Update = function(this, fDt)
+		gIFShellScreenTemplate_fnUpdate(this, fDt)
+		if this.done or this.leaving or not CGC.Active() then
+			return
+		end
+		CGC.Take("end")
+		if CGC.ClientBattleResult() == nil and not CGC.LinkLost() and not CGC.Peek("quit") then
+			return
+		end
+		this.done = true
+		if this.restart then
+			-- the same way back as after a battle: the shell restarts into the galaxy
+			CGC.AfterBattleCleanup()
+			SetState("shell")
+		else
+			movietrans(main)
+		end
+	end,
+
+	Input_Accept = function(this) end,
+
+	Input_Back = function(this)
+		if this.done or this.leaving then
+			return
+		end
+		this.leaving = true
+		Popup_YesNo.CurButton = "no"
+		Popup_YesNo.fnDone = function(yes)
+			this.leaving = nil
+			if yes then
+				this.done = true
+				CGC.LeaveCampaign("left while waiting for the battle result")
+			end
+		end
+		Popup_YesNo:fnActivate(1)
+		gPopup_fnSetTitleStr(Popup_YesNo, "ifs.onlinelobby.leavesession")
+	end,
+}
+AddIFScreen(ifs_cgc_result, "ifs_cgc_result")
 
 -- battle screen: the attacker confirms or backs out ------------------------------------
 
@@ -529,18 +692,43 @@ ifs_freeform_menu.Enter = function(this, bFwd)
 		end
 		CGC.EndSession("quit from menu")
 	end
+	-- loading a saved game would replace this campaign on one machine only
+	if this.buttons and this.buttons.load then
+		this.buttons.load.hidden = CGC.Active() and 1 or nil
+	end
 	return menuEnter(this, bFwd)
 end
 
+-- the campaign is won: the session ends with it ------------------------------------------
+
+local endEnter = ifs_freeform_end.Enter
+ifs_freeform_end.Enter = function(this, bFwd)
+	if CGC.Active() and not CGC.session.over then
+		-- the other player leaves through their own end screen; that is not a lost link
+		CGC.session.over = true
+		CGC.SaveSession()
+		CGC.Log("campaign over")
+	end
+	return endEnter(this, bFwd)
+end
+
+local endDone = ifs_freeform_end.Done
+ifs_freeform_end.Done = function(this)
+	if CGC.Active() then
+		CGC.EndSession("campaign finished")
+	end
+	return endDone(this)
+end
+
 -- watch the link while a campaign is running
-local lostShown = false
 function CGC.WatchLink()
-	if not CGC.Active() or lostShown or CGC.session.battle then
+	if not CGC.Active() or CGC.linkLostShown or CGC.session.battle or CGC.session.over then
 		return
 	end
 	local quit = CGC.Take("quit")
 	if quit or CGC.LinkLost() then
-		lostShown = true
+		CGC.linkLostShown = true
+		CGC.Log(quit and "the other player left the campaign" or "lost the connection to the other player")
 		Popup_Ok.fnDone = function()
 			CGC.LeaveCampaign("opponent left")
 		end

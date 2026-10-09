@@ -57,16 +57,21 @@ static const struct signature g_sigs[] = {
 static const char *STATE_HELPER_SIG = "40 53 48 83 EC 20 48 8B D9 48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 0D";
 #define STATE_HELPER_RVA 0x249b80
 static lua_State **g_current_state;
+static lua_CFunction g_orig_hooked;
 
 lua_State *game_current_state(void)
 {
 	return g_current_state ? *g_current_state : NULL;
 }
 
+void game_unload(void)
+{
+	g_current_state = NULL;
+	g_orig_hooked = NULL;
+}
+
 /* Every mission and the shell load their scripts through this, in each Lua state. */
 #define HOOK_FUNCTION "ScriptCB_DoFile"
-
-static lua_CFunction g_orig_hooked;
 
 static int parse_pattern(const char *s, int *out, int max)
 {

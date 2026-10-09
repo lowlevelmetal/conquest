@@ -5,6 +5,7 @@
  * game's own parser (luaL_loadbuffer), so no .lvl repacking is needed.
  */
 #include <windows.h>
+#include <bcrypt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include "log.h"
 #include "net.h"
 #include "shim.h"
+#include "udp.h"
 #include "version.h"
 
 #define BOOT_SCRIPT "lua\\boot.lua"
@@ -228,6 +230,17 @@ static int l_close(lua_State *L)
 	return 0;
 }
 
+/* host: drop the current player (if any) and wait for the next one */
+static int l_acceptnext(lua_State *L)
+{
+	if (!net_accept_next()) {
+		lua.pushnil(L);
+		return 1;
+	}
+	lua.pushboolean(L, 1);
+	return 1;
+}
+
 static int l_status(lua_State *L)
 {
 	char detail[256];
@@ -259,6 +272,76 @@ static int l_recv(lua_State *L)
 	}
 	lua.pushlstring(L, data, len);
 	net_free(data);
+	return 1;
+}
+
+/* ConquestNet_RandomHex(n): n hex digits from the system's secure generator */
+static int l_randomhex(lua_State *L)
+{
+	unsigned char bytes[32];
+	char hex[65];
+	int n = lua.gettop(L) >= 1 ? (int)lua.tonumber(L, 1) : 0;
+
+	if (n <= 0 || n > 64)
+		return return_error(L, "invalid length");
+	if (BCryptGenRandom(NULL, bytes, sizeof(bytes), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
+		return return_error(L, "no random source");
+	for (int i = 0; i < n; i++)
+		hex[i] = "0123456789abcdef"[(bytes[i / 2] >> (i & 1 ? 0 : 4)) & 15];
+	lua.pushlstring(L, hex, (size_t)n);
+	return 1;
+}
+
+/* ConquestNet_EchoUdp(port): host answers battle-port checks; (nil) stops */
+static int l_echoudp(lua_State *L)
+{
+	int port = lua.gettop(L) >= 1 && lua.type(L, 1) != LUA_TNIL ? (int)lua.tonumber(L, 1) : 0;
+	if (port <= 0 || port > 65535) {
+		udp_echo_stop();
+		return 0;
+	}
+	lua.pushboolean(L, udp_echo_start((unsigned short)port));
+	return 1;
+}
+
+/* ConquestNet_ProbeUdp(host, port): check the host's battle port; (nil) stops */
+static int l_probeudp(lua_State *L)
+{
+	const char *host = arg_string(L, 1, NULL);
+	int port = lua.gettop(L) >= 2 ? (int)lua.tonumber(L, 2) : 0;
+	if (!host || !host[0] || port <= 0 || port > 65535) {
+		udp_probe_stop();
+		return 0;
+	}
+	lua.pushboolean(L, udp_probe_start(host, (unsigned short)port));
+	return 1;
+}
+
+/* ConquestNet_ProbeResult(): nil, "probing", "ok" or "failed" */
+static int l_proberesult(lua_State *L)
+{
+	switch (udp_probe_result()) {
+	case UDP_PROBE_RUNNING: lua.pushstring(L, "probing"); break;
+	case UDP_PROBE_OK:      lua.pushstring(L, "ok"); break;
+	case UDP_PROBE_FAILED:  lua.pushstring(L, "failed"); break;
+	default:                lua.pushnil(L); break;
+	}
+	return 1;
+}
+
+int testwin_press(int scancode, int sym);
+
+/* ConquestNet_TestPress(scancode, keycode): test copies (CONQUEST_WINDOW) only,
+ * press a key through the game's event loop; nil when not available */
+static int l_testpress(lua_State *L)
+{
+	int scancode = lua.gettop(L) >= 1 ? (int)lua.tonumber(L, 1) : 0;
+	int sym = lua.gettop(L) >= 2 ? (int)lua.tonumber(L, 2) : 0;
+	if (!testwin_press(scancode, sym)) {
+		lua.pushnil(L);
+		return 1;
+	}
+	lua.pushboolean(L, 1);
 	return 1;
 }
 
@@ -351,14 +434,29 @@ static int l_getvalue(lua_State *L)
 }
 
 /* Lua opts in with ConquestNet_EnableTick(1) and turns it off before leaving a
- * battle, so the tick never runs while the engine is tearing a state down. */
+ * battle. The tick only ever runs in the Lua state that turned it on, and it
+ * goes off by itself when a new state starts (a battle that ended some other
+ * way), so it never runs in a state the engine has let go of. */
 static volatile LONG g_tick_enabled;
+static lua_State *g_tick_state;
+
+static void tick_off(const char *why)
+{
+	if (InterlockedExchange(&g_tick_enabled, 0))
+		log_printf("bridge: per-frame tick off (%s)", why);
+	g_tick_state = NULL;
+}
 
 static int l_enabletick(lua_State *L)
 {
 	int on = lua.gettop(L) >= 1 && lua.tonumber(L, 1) != 0.0f;
-	InterlockedExchange(&g_tick_enabled, on);
-	log_printf("bridge: per-frame tick %s", on ? "on" : "off");
+	if (!on) {
+		tick_off("by script");
+		return 0;
+	}
+	g_tick_state = L;
+	InterlockedExchange(&g_tick_enabled, 1);
+	log_printf("bridge: per-frame tick on");
 	return 0;
 }
 
@@ -369,7 +467,7 @@ void bridge_tick(void)
 	lua_State *L = g_tick_enabled ? game_current_state() : NULL;
 	int top;
 
-	if (busy || !L)
+	if (busy || !L || L != g_tick_state)
 		return;
 	busy = 1;
 	top = lua.gettop(L);
@@ -396,11 +494,17 @@ static const struct {
 	{ "ConquestNet_Host",           l_host },
 	{ "ConquestNet_Connect",        l_connect },
 	{ "ConquestNet_Close",          l_close },
+	{ "ConquestNet_AcceptNext",     l_acceptnext },
 	{ "ConquestNet_Status",         l_status },
 	{ "ConquestNet_Send",           l_send },
 	{ "ConquestNet_Recv",           l_recv },
 	{ "ConquestNet_LocalAddresses", l_localaddresses },
 	{ "ConquestNet_SetTunnel",      l_settunnel },
+	{ "ConquestNet_RandomHex",      l_randomhex },
+	{ "ConquestNet_EchoUdp",        l_echoudp },
+	{ "ConquestNet_ProbeUdp",       l_probeudp },
+	{ "ConquestNet_ProbeResult",    l_proberesult },
+	{ "ConquestNet_TestPress",      l_testpress },
 	{ "ConquestNet_EnableTick",     l_enabletick },
 	{ "ConquestNet_Time",           l_time },
 	{ "ConquestNet_SetValue",       l_setvalue },
@@ -422,6 +526,8 @@ void bridge_register(lua_State *L)
 	lua_pop(L, 1);
 	if (registered)
 		return;
+	/* a new Lua state: whatever state the tick was for is gone */
+	tick_off("new Lua state");
 
 	for (size_t i = 0; i < sizeof(g_functions) / sizeof(g_functions[0]); i++) {
 		lua.pushstring(L, g_functions[i].name);
@@ -430,6 +536,25 @@ void bridge_register(lua_State *L)
 	}
 	log_printf("bridge: registered API in lua_State %p", (void *)L);
 	run_file(L, BOOT_SCRIPT, 0);
+}
+
+/* Battlefront2.dll is being unloaded (back to the launcher's game select):
+ * forget everything that belongs to that run of the game. */
+void bridge_unload(void)
+{
+	tick_off("game unloaded");
+	net_close();
+	udp_echo_stop();
+	udp_probe_stop();
+	InitOnceExecuteOnce(&g_values_init, init_values, NULL, NULL);
+	EnterCriticalSection(&g_values_lock);
+	for (int i = 0; i < MAX_VALUES; i++) {
+		free(g_values[i].key);
+		free(g_values[i].value);
+		g_values[i].key = g_values[i].value = NULL;
+		g_values[i].len = 0;
+	}
+	LeaveCriticalSection(&g_values_lock);
 }
 
 void bridge_after_dofile(lua_State *L, const char *name)

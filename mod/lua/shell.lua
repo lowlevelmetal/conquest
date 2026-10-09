@@ -27,6 +27,11 @@ if session then
 	elseif session.battle then
 		log("shell: returning from an online battle")
 		CGC.AfterBattleCleanup()
+		CGC.Unstash()
+		CGC.SendBattleResult()
+	elseif not ScriptCB_IsMetagameStateSaved() then
+		-- the campaign was left or finished some other way: no online game now
+		CGC.EndSession("no campaign in progress")
 	end
 end
 

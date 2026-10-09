@@ -10,4 +10,7 @@ int shim_install(HMODULE mod);
 /* Route discovery through the TCP peer (1) or the real network (0). */
 void shim_set_tunnel(int on);
 
+/* Battlefront2.dll is being unloaded: forget its sockets. */
+void shim_unload(void);
+
 #endif

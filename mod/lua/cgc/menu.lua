@@ -10,15 +10,20 @@
 -- The Galactic Conquest button itself is added to the Multiplayer menu's
 -- layout in boot.lua, before that screen builds its buttons.
 --
--- Lobby messages: the joining player sends hello {protocol, name}; the host
--- answers setup {scenario, hostTeam, name} or refuse {reason}; ping/pong
--- measure latency; start launches the campaign; bye leaves the lobby.
+-- Lobby messages: the joining player sends hello {protocol, version, name};
+-- the host answers setup {scenario, hostTeam, name, udp} or refuse {reason};
+-- ping/pong measure latency; udp {ok} reports the battle-port check; start
+-- launches the campaign; bye leaves the lobby.
+--
+-- The host's port stays open while the lobby is up (native net.c): a
+-- connection becomes the player once it sends its first message, which must
+-- be hello. Anyone else connecting meanwhile is refused as full.
 
 local function U(text)
 	return ScriptCB_tounicode(text)
 end
 
-local HELLO_TIMEOUT = 10  -- seconds a connection may stay silent before the host drops it
+local HELLO_TIMEOUT = 5   -- seconds from a connection's first message to its hello
 local PING_INTERVAL = 2
 
 local function teamColor(team)
@@ -99,6 +104,12 @@ end
 local join = {}
 
 local function joinCheck()
+	-- a refusal arrives just before the host closes the connection
+	local refused = CGC.Take("refuse")
+	if refused then
+		join.error = refused.reason == "full" and "ifs.mp.joinerrors.full" or "ifs.onlinelobby.wrongver"
+		return -1
+	end
 	local state = ConquestNet_Status()
 	if state == "error" or state == "closed" then
 		join.error = join.error or "ifs.mp.joinerrors.noconnect"
@@ -111,17 +122,13 @@ local function joinCheck()
 		join.helloSent = true
 		CGC.Send("hello", { protocol = CGC.PROTOCOL, version = ConquestNet_Version(), name = CGC.PlayerName() })
 	end
-	local refused = CGC.Take("refuse")
-	if refused then
-		join.error = refused.reason == "full" and "ifs.mp.joinerrors.full" or "ifs.onlinelobby.wrongver"
-		return -1
-	end
 	local setup = CGC.Take("setup")
 	if setup then
 		local s = CGC.session
 		s.scenario = setup.scenario
 		s.myTeam = 3 - setup.hostTeam
-		s.peerName = setup.name
+		s.peerName = CGC.CleanName(setup.name)
+		s.udpCheck = setup.udp and true or nil
 		CGC.SaveSession()
 		return 1
 	end
@@ -615,12 +622,34 @@ local function fillLobby(this)
 	IFObj_fnSetVis(this.LaunchBtn, (host and this.peer) and 1 or nil)
 end
 
-local function startListening(this)
+-- the battle-port check, shown under the player list
+local function showNotice(this)
+	local s = CGC.session
+	local text = ""
+	if this.udp == "probing" then
+		text = "Checking the connection for battles ..."
+	elseif this.udp == "failed" then
+		if s.role == "host" then
+			text = (this.peer and this.peer.name or "The other player") .. " cannot reach this PC on UDP port " ..
+				CGC.BATTLE_PORT .. ", so battles will not start. Forward UDP " .. CGC.BATTLE_PORT ..
+				" to this PC, or join a virtual LAN."
+		else
+			text = "This PC cannot reach " .. tostring(s.peerName) .. " on UDP port " .. CGC.BATTLE_PORT ..
+				", so battles will not start. The host must forward UDP " .. CGC.BATTLE_PORT ..
+				" to their PC, or you can join a virtual LAN."
+		end
+	end
+	IFText_fnSetUString(this.notice, U(text))
+	IFObj_fnSetVis(this.notice, text ~= "" and 1 or nil)
+end
+
+local function openLobby(this)
 	this.peer = nil
 	this.ping = nil
 	this.connectedAt = nil
-	this.relistenAt = nil
+	this.udp = nil
 	CGC.mailbox = {}
+	fillLobby(this)
 	local ok, err = ConquestNet_Host(CGC.PORT)
 	if not ok then
 		CGC.Log("cannot host: " .. tostring(err))
@@ -629,8 +658,28 @@ local function startListening(this)
 			CGC.EndSession("host failed")
 			ScriptCB_PopScreen()
 		end)
+		return
+	end
+	-- answer the joining player's battle-port check while the lobby is open
+	this.udpEcho = ConquestNet_EchoUdp(CGC.BATTLE_PORT) and true or nil
+	fillLobby(this)
+	showNotice(this)
+end
+
+-- drop the current player or connection (if any) and wait for the next
+local function nextPlayer(this)
+	this.peer = nil
+	this.ping = nil
+	this.connectedAt = nil
+	this.udp = nil
+	CGC.mailbox = {}
+	if not ConquestNet_AcceptNext() then
+		-- the port closed under us: open it again (shows an error if it can't)
+		openLobby(this)
+		return
 	end
 	fillLobby(this)
+	showNotice(this)
 end
 
 local function leaveLobby(this, reason)
@@ -642,56 +691,64 @@ local function leaveLobby(this, reason)
 end
 
 local function hostUpdate(this)
-	if this.relistenAt then
-		if ConquestNet_Time() >= this.relistenAt then
-			startListening(this)
-		end
-		return
-	end
 	local state = ConquestNet_Status()
 	if this.peer then
-		if CGC.Take("bye") or state == "closed" or state == "error" then
+		if CGC.Take("bye") or CGC.LinkLost() then
 			CGC.Log("player left the lobby: " .. tostring(this.peer.name))
-			startListening(this)
+			nextPlayer(this)
+			return
+		end
+		local udp = CGC.Take("udp")
+		if udp then
+			this.udp = udp.ok and "ok" or "failed"
+			showNotice(this)
 		end
 		return
 	end
-	if state == "error" then
-		startListening(this)
+	if state == "error" or state == "closed" then
+		-- a connection that gave up (or was dropped) before saying hello
+		nextPlayer(this)
 		return
 	end
 	if state ~= "connected" then
-		this.connectedAt = nil
 		return
 	end
 	this.connectedAt = this.connectedAt or ConquestNet_Time()
 	local hello = CGC.Take("hello")
 	if not hello then
-		if ConquestNet_Time() - this.connectedAt > HELLO_TIMEOUT then
+		-- a player's first message is hello; anything else is not a player
+		if table.getn(CGC.mailbox) > 0 or ConquestNet_Time() - this.connectedAt > HELLO_TIMEOUT then
 			CGC.Log("connection without hello; listening again")
-			startListening(this)
+			nextPlayer(this)
 		end
 		return
 	end
-	if hello.protocol ~= CGC.PROTOCOL then
-		CGC.Log("refusing " .. tostring(hello.name) .. ": protocol " .. tostring(hello.protocol))
+	local name = CGC.CleanName(hello.name)
+	if hello.protocol ~= CGC.PROTOCOL or hello.version ~= ConquestNet_Version() then
+		CGC.Log("refusing " .. name .. ": version " .. tostring(hello.version) .. ", protocol " .. tostring(hello.protocol))
+		-- the refusal still goes out after the connection is dropped
 		CGC.Send("refuse", { reason = "version" })
-		this.relistenAt = ConquestNet_Time() + 1
+		nextPlayer(this)
 		return
 	end
 	local s = CGC.session
-	this.peer = { name = hello.name }
-	CGC.Log(tostring(hello.name) .. " joined the lobby")
-	CGC.Send("setup", { scenario = s.scenario, hostTeam = s.myTeam, name = s.myName })
+	this.peer = { name = name }
+	CGC.Log(name .. " joined the lobby")
+	CGC.Send("setup", { scenario = s.scenario, hostTeam = s.myTeam, name = s.myName, udp = this.udpEcho })
+	if this.udpEcho then
+		this.udp = "probing"
+	end
 	ifelm_shellscreen_fnPlaySound("shell_select_change")
 	SetCurButton("launch")
 	fillLobby(this)
+	showNotice(this)
 end
 
 local function clientUpdate(this)
 	if CGC.Take("start") then
 		CGC.Log("host launched the campaign")
 		this.started = true
+		ConquestNet_ProbeUdp(nil)
 		CGC.StartGame()
 		return
 	end
@@ -701,6 +758,16 @@ local function clientUpdate(this)
 		showPopupOk("ifs.mp.joinerrors.hostquit", function()
 			ScriptCB_PopScreen()
 		end)
+		return
+	end
+	if this.udp == "probing" then
+		local result = ConquestNet_ProbeResult()
+		if result == "ok" or result == "failed" then
+			this.udp = result
+			CGC.Log("battle port check: " .. result)
+			CGC.Send("udp", { ok = result == "ok" })
+			showNotice(this)
+		end
 	end
 end
 
@@ -710,6 +777,7 @@ local function launch(this)
 	CGC.SaveSession()
 	CGC.Send("start")
 	this.started = true
+	ConquestNet_EchoUdp(nil)
 	CGC.StartGame()
 end
 
@@ -760,9 +828,12 @@ ifs_cgc_lobby = NewIFShellScreen {
 		end
 		this.failed = nil
 		this.started = nil
+		this.leaving = nil
 		this.peer = nil
 		this.ping = nil
 		this.pingAt = 0
+		this.udp = nil
+		this.udpEcho = nil
 
 		local s
 		if this.hostScenario then
@@ -780,15 +851,20 @@ ifs_cgc_lobby = NewIFShellScreen {
 			ScriptCB_ununicode(ScriptCB_getlocalizestr(CGC.SCENARIOS[s.scenario].era))))
 		IFText_fnSetString(this.IPAddr, "IP: " .. (host and ConquestNet_LocalAddresses() or s.host))
 		if host then
-			startListening(this)
+			openLobby(this)
 		else
+			if s.udpCheck and ConquestNet_ProbeUdp(s.host, CGC.BATTLE_PORT) then
+				this.udp = "probing"
+			end
 			fillLobby(this)
+			showNotice(this)
 		end
 	end,
 
 	Update = function(this, fDt)
 		gIFShellScreenTemplate_fnUpdate(this, fDt)
-		if this.failed or this.started or not CGC.session then
+		-- nothing happens behind the Leave prompt; messages wait until it closes
+		if this.failed or this.started or this.leaving or not CGC.session then
 			return
 		end
 		if CGC.session.role == "host" then
@@ -833,8 +909,10 @@ ifs_cgc_lobby = NewIFShellScreen {
 		end
 		ifelm_shellscreen_fnPlaySound(this.exitSound)
 		local host = CGC.session and CGC.session.role == "host"
+		this.leaving = true
 		Popup_YesNo.CurButton = "no"
 		Popup_YesNo.fnDone = function(yes)
+			this.leaving = nil
 			if yes then
 				leaveLobby(this, host and "host closed the lobby" or "left the lobby")
 			end
@@ -886,6 +964,19 @@ do
 		ScreenRelativeX = 0.5,
 		ScreenRelativeY = 0.5,
 		halign = "hcenter",
+		nocreatebackground = 1,
+	}
+
+	this.notice = NewIFText {
+		font = "gamefont_small",
+		textw = w - 50,
+		texth = 60,
+		x = -(w - 50) * 0.5,
+		y = this.status.y + 24,
+		ScreenRelativeX = 0.5,
+		ScreenRelativeY = 0.5,
+		halign = "hcenter",
+		valign = "top",
 		nocreatebackground = 1,
 	}
 

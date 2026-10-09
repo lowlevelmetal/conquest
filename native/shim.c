@@ -17,18 +17,21 @@
 #include "log.h"
 #include "net.h"
 #include "shim.h"
+#include "udp.h"
 
 typedef int (WSAAPI *connect_fn)(SOCKET, const struct sockaddr *, int);
 typedef int (WSAAPI *bind_fn)(SOCKET, const struct sockaddr *, int);
 typedef int (WSAAPI *send_fn)(SOCKET, const char *, int, int);
 typedef int (WSAAPI *recvfrom_fn)(SOCKET, char *, int, int, struct sockaddr *, int *);
 typedef int (WSAAPI *closesocket_fn)(SOCKET);
+typedef int (WSAAPI *sendto_fn)(SOCKET, const char *, int, int, const struct sockaddr *, int);
 
 static connect_fn real_connect;
 static bind_fn real_bind;
 static send_fn real_send;
 static recvfrom_fn real_recvfrom;
 static closesocket_fn real_closesocket;
+static sendto_fn real_sendto;
 
 static SOCKET g_broadcast = INVALID_SOCKET;  /* connected to 255.255.255.255:<port> */
 static SOCKET g_listener = INVALID_SOCKET;   /* bound to the discovery port */
@@ -111,6 +114,16 @@ static int WSAAPI hook_recvfrom(SOCKET s, char *buf, int len, int flags, struct 
 	return real_recvfrom(s, buf, len, flags, from, fromlen);
 }
 
+/* test copies with CONQUEST_TEST_BLOCK_UDP=1: the host's battle port is
+ * unreachable, as when it is not forwarded */
+static int WSAAPI hook_sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
+{
+	const struct sockaddr_in *in = (const struct sockaddr_in *)to;
+	if (to && to->sa_family == AF_INET && ntohs(in->sin_port) == 3658)
+		return len;
+	return real_sendto(s, buf, len, flags, to, tolen);
+}
+
 static int WSAAPI hook_closesocket(SOCKET s)
 {
 	if (s == g_broadcast)
@@ -139,6 +152,14 @@ static int hook_SDL_PollEvent(void *event)
 			log_printf("shim: window close event");
 	}
 	return r;
+}
+
+void shim_unload(void)
+{
+	shim_set_tunnel(0);
+	g_broadcast = INVALID_SOCKET;
+	g_listener = INVALID_SOCKET;
+	g_port = 3656;
 }
 
 void shim_set_tunnel(int on)
@@ -189,6 +210,26 @@ int shim_install(HMODULE mod)
 		}
 	}
 	log_printf("shim: hooked %d Winsock imports", count);
+	if (udp_test_blocked()) {
+		imp = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress);
+		for (; imp->Name; imp++) {
+			IMAGE_THUNK_DATA *names, *iat;
+			if (_stricmp((const char *)(base + imp->Name), "WS2_32.dll") || !imp->OriginalFirstThunk)
+				continue;
+			names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+			iat = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+			for (; names->u1.AddressOfData; names++, iat++) {
+				DWORD old;
+				if (!IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal) || IMAGE_ORDINAL(names->u1.Ordinal) != 20)
+					continue;
+				real_sendto = (sendto_fn)(void *)iat->u1.Function;
+				VirtualProtect(&iat->u1.Function, sizeof(iat->u1.Function), PAGE_READWRITE, &old);
+				iat->u1.Function = (ULONG_PTR)hook_sendto;
+				VirtualProtect(&iat->u1.Function, sizeof(iat->u1.Function), old, &old);
+				log_printf("shim: test mode, battle packets to port 3658 are dropped");
+			}
+		}
+	}
 
 	/* SDL_PollEvent by name, for the platform event log */
 	g_platform_event_type = (const unsigned *)(base + 0x64b148);
